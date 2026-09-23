@@ -1,0 +1,14 @@
+[project]
+name = "clip-contour-north"
+version = "0.1.0"
+description = "Prismoidal Frustum Volumetric Analysis"
+readme = "docs/PROJECT_OVERVIEW.md"
+requires-python = ">=3.12"
+dependencies = [
+    "geopandas>=1.1.4",
+    "matplotlib>=3.11.2",
+    "plotly>=7.1.0",
+    "pyproj>=3.8.0",
+    "scipy>=1.18.1",
+    "shapely>=2.1.2",
+]
