@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MMD Frustum 3D Viewer</title>
+  <link rel="stylesheet"
+    href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #080c18; }
+    #cesiumContainer { width: 100%; height: 100%; }
+
+    /* ── Shared panel base ──────────────────────────────────────────────── */
+    .panel {
+      position: absolute;
+      background: rgba(8, 13, 28, 0.92);
+      border: 1px solid rgba(80, 140, 255, 0.22);
+      border-radius: 10px;
+      padding: 14px;
+      color: #c8ddf0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 12px;
+      z-index: 100;
+      backdrop-filter: blur(6px);
+    }
+    .panel h2 {
+      font-size: 12px;
+      font-weight: 700;
+      color: #6eb0ff;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .panel h3 {
+      font-size: 12px;
+      font-weight: 700;
+      color: #6eb0ff;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .divider { height: 1px; background: rgba(80,140,255,0.15); margin: 10px 0; }
+
+    /* ── Controls (left) ────────────────────────────────────────────────── */
+    #controls {
+      top: 10px; left: 10px;
+      width: 232px;
+      max-height: calc(100vh - 20px);
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(80,140,255,.3) transparent;
+    }
+
+    /* ── Section labels + value badge ───────────────────────────────────── */
+    .ctrl-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 5px;
+    }
+    .ctrl-label {
+      color: #7a9ab8; font-size: 10.5px;
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .ctrl-badge {
+      color: #fff; font-weight: 700; font-size: 11px;
+      background: rgba(80,140,255,.18); padding: 1px 7px;
+      border-radius: 10px;
+    }
+
+    /* ── Range sliders ───────────────────────────────────────────────────── */
+    input[type="range"] {
+      -webkit-appearance: none; appearance: none;
+      width: 100%; height: 4px; border-radius: 2px;
+      background: rgba(80,140,255,.2); cursor: pointer; outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 14px; height: 14px;
+      border-radius: 50%; background: #4a9eff; cursor: pointer;
+      box-shadow: 0 0 4px rgba(74,158,255,.6);
+    }
+
+    /* ── Select ──────────────────────────────────────────────────────────── */
+    select {
+      width: 100%; padding: 5px 8px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(80,140,255,.28);
+      border-radius: 5px; color: #c8ddf0; font-size: 11.5px; cursor: pointer;
+    }
+
+    /* ── Toggle buttons ──────────────────────────────────────────────────── */
+    .toggle-row { display: flex; gap: 6px; }
+    .toggle-btn {
+      flex: 1; padding: 5px 0;
+      border-radius: 5px;
+      border: 1px solid rgba(80,140,255,.25);
+      background: transparent; color: #7a9ab8;
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .toggle-btn.active {
+      background: rgba(26,72,160,.7); border-color: #4a9eff; color: #fff;
+    }
+    .toggle-btn:hover:not(.active) {
+      background: rgba(80,140,255,.1); color: #c8ddf0;
+    }
+
+    /* ── Camera presets grid ─────────────────────────────────────────────── */
+    .preset-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+    .preset-btn {
+      padding: 5px 2px; border-radius: 5px;
+      border: 1px solid rgba(80,140,255,.2);
+      background: rgba(255,255,255,.03); color: #7a9ab8;
+      font-size: 10.5px; cursor: pointer; text-align: center;
+      transition: background .15s, color .15s;
+    }
+    .preset-btn:hover { background: rgba(74,158,255,.15); color: #c8ddf0; }
+
+    /* ── Checkbox row ────────────────────────────────────────────────────── */
+    .check-row {
+      display: flex; align-items: center; gap: 6px; margin-top: 6px;
+    }
+    .check-row label { color: #7a9ab8; font-size: 11px; cursor: pointer; }
+    input[type="checkbox"] { accent-color: #4a9eff; cursor: pointer; }
+
+    /* ── Stats card (top-right) ──────────────────────────────────── */
+    #statsCard { top: 10px; right: 10px; width: 210px; }
+    .stat-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.05);
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-key   { color: #6a8aaa; font-size: 10.5px; }
+    .stat-val   { color: #fff;    font-size: 11px; font-weight: 700; }
+    #statsSite  { font-size: 13px; font-weight: 800; color: #9fd3ff;
+                  margin-bottom: 10px; word-break: break-all; }
+
+    /* ── Info hover card (bottom-right) ──────────────────────────────────── */
+    #infoCard {
+      bottom: 36px; right: 10px; width: 260px; display: none;
+      border-color: rgba(80,220,140,.3);
+    }
+    #infoCard h2 { color: #7fffb4; }
+    .info-row {
+      display: flex; justify-content: space-between;
+      padding: 2.5px 0; border-bottom: 1px solid rgba(255,255,255,.05);
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-key { color: #6a8aaa; font-size: 10.5px; }
+    .info-val { color: #eee; font-size: 10.5px; font-weight: 600; }
+
+    /* ── Legend bar (bottom-left) ────────────────────────────────────────── */
+    #legendWrap {
+      position: absolute; bottom: 36px; left: 250px;
+      z-index: 100; display: flex; flex-direction: column; gap: 3px;
+    }
+    #legendCanvas {
+      width: 200px; height: 10px; border-radius: 5px;
+      display: block;
+    }
+    #legendLabels {
+      display: flex; justify-content: space-between;
+      font-size: 9.5px; color: #7a9ab8;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      width: 200px;
+    }
+
+    /* ── Loading overlay ─────────────────────────────────────────────────── */
+    #loadingOverlay {
+      position: absolute; inset: 0;
+      background: rgba(6,10,22,.88); display: flex;
+      flex-direction: column; align-items: center; justify-content: center;
+      z-index: 300;
+    }
+    .spinner {
+      width: 42px; height: 42px; border-radius: 50%;
+      border: 3px solid rgba(74,158,255,.2);
+      border-top-color: #4a9eff;
+      animation: spin .75s linear infinite;
+      margin-bottom: 16px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loadingMsg { font-size: 14px; color: #7a9ab8;
+                  font-family: 'Segoe UI', system-ui, sans-serif; }
+
+    /* ── Error box ───────────────────────────────────────────────────────── */
+    #errorBox {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(140,20,20,.95); color: #fcc;
+      padding: 22px 30px; border-radius: 10px;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px; text-align: left;
+      max-width: 520px; line-height: 1.6; z-index: 400; display: none;
+      box-shadow: 0 0 20px rgba(0,0,0,0.8);
+      border: 1px solid rgba(255,100,100,0.4);
+    }
+    #errorBox code {
+      display: inline-block; background: rgba(0,0,0,.4);
+      padding: 2px 8px; border-radius: 4px; font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay">
+  <div class="spinner"></div>
+  <div id="loadingMsg">Loading viewer data…</div>
+</div>
+
+<!-- Error message -->
+<div id="errorBox"></div>
+
+<!-- ── Controls panel ─────────────────────────────────────────────────────── -->
+<div id="controls" class="panel">
+  <h2>⛰ MMD 3D Viewer</h2>
+
+  <!-- Base Map Imagery -->
+  <div style="margin-bottom:12px">
+    <div class="ctrl-label" style="margin-bottom:5px">Base Imagery Layer</div>
+    <select id="basemapSelect" onchange="setBasemap(this.value)">
+      <option value="satellite" selected>ESRI World Imagery (Satellite)</option>
+      <option value="osm">OpenStreetMap</option>
+      <option value="dark">CartoDB Dark</option>
+    </select>
+  </div>
+
+  <!-- Ground Contact / Clamping Mode -->
+  <div style="margin-bottom:12px">
+    <div class="ctrl-label" style="margin-bottom:5px">Ground Contact / Datum</div>
+    <select id="groundModeSelect" onchange="setGroundMode(this.value)">
+      <option value="ground" selected>Anchored to Ground (0m Datum)</option>
+      <option value="absolute">Absolute Elevation (True MSL)</option>
+    </select>
+  </div>
+
+  <!-- Geometry mode -->
+  <div style="margin-bottom:12px">
+    <div class="ctrl-label" style="margin-bottom:5px">Geometry Mode</div>
+    <div class="toggle-row">
+      <button class="toggle-btn active" id="btnHollow" onclick="setMode('hollow')">Hollow</button>
+      <button class="toggle-btn"        id="btnSolid"  onclick="setMode('solid')">Solid</button>
+    </div>
+  </div>
+
+  <!-- Colorscale -->
+  <div style="margin-bottom:12px">
+    <div class="ctrl-label" style="margin-bottom:5px">Color Scale</div>
+    <select id="schemeSelect" onchange="setScheme(this.value)">
+      <option value="bathymetric" selected>Bathymetric (Blue Depth)</option>
+      <option value="magma">Magma</option>
+      <option value="viridis">Viridis</option>
+      <option value="plasma">Plasma</option>
+      <option value="rainbow">Rainbow</option>
+    </select>
+  </div>
+
+  <!-- Vertical exaggeration -->
+  <div style="margin-bottom:12px">
+    <div class="ctrl-header">
+      <span class="ctrl-label">Vertical Exaggeration</span>
+      <span class="ctrl-badge" id="veVal">1.0×</span>
+    </div>
+    <input type="range" id="veSlider" min="1" max="20" step="0.5" value="1"
+           oninput="setVE(+this.value)" />
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Fill simulation -->
+  <div style="margin-bottom:12px">
+    <div class="ctrl-header">
+      <span class="ctrl-label">Fill Simulation</span>
+      <span class="ctrl-badge" id="fillVal">Off</span>
+    </div>
+    <input type="range" id="fillSlider" min="0" max="100" step="1" value="0"
+           oninput="setFill(+this.value)" />
+    <div class="check-row">
+      <input type="checkbox" id="fillCheck" onchange="toggleFill(this.checked)" />
+      <label for="fillCheck">Enable water fill</label>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Contours toggle -->
+  <div style="margin-bottom:12px">
+    <div class="toggle-row">
+      <button class="toggle-btn active" id="btnContours" onclick="toggleContours()">
+        Contour Lines On
+      </button>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Camera presets -->
+  <div>
+    <div class="ctrl-label" style="margin-bottom:5px">Camera Presets</div>
+    <div class="preset-grid">
+      <button class="preset-btn" onclick="cameraPreset('plan')">🔭 Plan</button>
+      <button class="preset-btn" onclick="cameraPreset('se')">↗ Oblique SE</button>
+      <button class="preset-btn" onclick="cameraPreset('nw')">↖ Oblique NW</button>
+      <button class="preset-btn" onclick="cameraPreset('section')">⟺ Section</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Stats card ─────────────────────────────────────────────────────────── -->
+<div id="statsCard" class="panel">
+  <div id="statsSite">Loading…</div>
+  <div class="stat-row"><span class="stat-key">Total Volume</span><span class="stat-val" id="sVol">—</span></div>
+  <div class="stat-row"><span class="stat-key">Acre-Feet</span>   <span class="stat-val" id="sAcft">—</span></div>
+  <div class="stat-row"><span class="stat-key">Layers</span>      <span class="stat-val" id="sLayers">—</span></div>
+  <div class="stat-row"><span class="stat-key">Crest Elev.</span><span class="stat-val" id="sCrest">—</span></div>
+  <div class="stat-row"><span class="stat-key">Base Elev.</span> <span class="stat-val" id="sBase">—</span></div>
+  <div class="stat-row"><span class="stat-key">Total Depth</span><span class="stat-val" id="sDepth">—</span></div>
+</div>
+
+<!-- ── Legend ─────────────────────────────────────────────────────────────── -->
+<div id="legendWrap">
+  <canvas id="legendCanvas" width="200" height="10"></canvas>
+  <div id="legendLabels"><span>Shallow</span><span>Deep</span></div>
+</div>
+
+<!-- ── Info hover card ────────────────────────────────────────────────────── -->
+<div id="infoCard" class="panel">
+  <h2 id="infoTitle">Layer Info</h2>
+  <div class="info-row"><span class="info-key">Elevation</span>   <span class="info-val" id="iElev">—</span></div>
+  <div class="info-row"><span class="info-key">Depth</span>       <span class="info-val" id="iDepth">—</span></div>
+  <div class="info-row"><span class="info-key">Area</span>        <span class="info-val" id="iArea">—</span></div>
+  <div class="info-row"><span class="info-key">Slice Vol.</span>  <span class="info-val" id="iVol">—</span></div>
+  <div class="info-row"><span class="info-key">Cum. Vol.</span>   <span class="info-val" id="iCumVol">—</span></div>
+  <div class="info-row"><span class="info-key">Cum. Acre-ft</span><span class="info-val" id="iAcft">—</span></div>
+</div>
+
+<!-- ── CesiumJS ──────────────────────────────────────────────────────────── -->
+<script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+<script>
+'use strict';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. Colour Schemes   t=0 → shallow (near crest)  |  t=1 → deep (near base)
+// ─────────────────────────────────────────────────────────────────────────────
+const SCHEMES = {
+  bathymetric: [[0,'#b8ddff'],[0.35,'#2879c0'],[0.70,'#10487a'],[1,'#061220']],
+  magma:       [[0,'#fcfdbf'],[0.33,'#fc8961'],[0.67,'#b73779'],[1,'#0d0221']],
+  viridis:     [[0,'#fde725'],[0.25,'#5ec962'],[0.5,'#21918c'],[0.75,'#3b528b'],[1,'#440154']],
+  plasma:      [[0,'#f0f921'],[0.25,'#fca636'],[0.5,'#e16462'],[0.75,'#b12a90'],[1,'#0d0887']],
+  rainbow:     [[0,'#ff3333'],[0.25,'#ffaa00'],[0.5,'#00cc44'],[0.75,'#0099ff'],[1,'#9900ff']],
+};
+
+function hexToRgb(hex) {
+  return [
+    parseInt(hex.slice(1,3),16)/255,
+    parseInt(hex.slice(3,5),16)/255,
+    parseInt(hex.slice(5,7),16)/255,
+  ];
+}
+
+function lerpColor(t, schemeName) {
+  if (!SCHEMES.hasOwnProperty(schemeName)) {
+    throw new Error(`Invalid color scheme '${schemeName}'. Valid options: ${Object.keys(SCHEMES).join(', ')}`);
+  }
+  const stops = SCHEMES[schemeName];
+  let lo = stops[0], hi = stops[stops.length - 1];
+  for (let i = 0; i < stops.length - 1; i++) {
+    if (t >= stops[i][0] && t <= stops[i+1][0]) { lo = stops[i]; hi = stops[i+1]; break; }
+  }
+  const range = hi[0] - lo[0];
+  const f     = range < 1e-9 ? 0 : (t - lo[0]) / range;
+  const [r0,g0,b0] = hexToRgb(lo[1]);
+  const [r1,g1,b1] = hexToRgb(hi[1]);
+  return new Cesium.Color(r0+(r1-r0)*f, g0+(g1-g0)*f, b0+(b1-b0)*f, 0.90);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. App State
+// ─────────────────────────────────────────────────────────────────────────────
+const APP = {
+  data:          null,   // parsed FeatureCollection
+  summary:       null,   // data.properties
+  basemap:       'satellite', // 'satellite', 'osm', 'dark'
+  groundMode:    'ground',    // 'ground' (0m datum, clamped to ground) or 'absolute' (MSL)
+  mode:          'hollow',
+  scheme:        'bathymetric',
+  vExag:         1.0,
+  fillEnabled:   false,
+  fillFraction:  0.0,    // 0–1 of total depth
+  showContours:  true,
+  fillEntity:    null,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. Cesium Viewer Setup
+// ─────────────────────────────────────────────────────────────────────────────
+Cesium.Ion.defaultAccessToken =
+  'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJub25lIn0.none';
+
+const viewer = new Cesium.Viewer('cesiumContainer', {
+  imageryProvider:       false,
+  terrainProvider:       new Cesium.EllipsoidTerrainProvider(),
+  baseLayerPicker:       false,
+  geocoder:              false,
+  homeButton:            false,
+  sceneModePicker:       false,
+  navigationHelpButton:  false,
+  animation:             false,
+  timeline:              false,
+  fullscreenButton:      false,
+  infoBox:               false,
+  selectionIndicator:    false,
+  creditContainer:       document.createElement('div'),
+  shadows:               false,
+});
+
+const camCtrl = viewer.scene.screenSpaceCameraController;
+camCtrl.enableRotate = true;
+camCtrl.enableTranslate = true;
+camCtrl.enableZoom = true;
+camCtrl.enableTilt = true;
+camCtrl.enableLook = true;
+camCtrl.minimumZoomDistance = 1.0;
+
+viewer.scene.globe.enableLighting          = false;
+viewer.scene.globe.depthTestAgainstTerrain = false;
+viewer.scene.globe.showGroundAtmosphere    = false;
+viewer.scene.skyAtmosphere.show            = false;
+viewer.scene.backgroundColor = new Cesium.Color(0.032, 0.050, 0.108, 1.0);
+
+function applyBasemap(type) {
+  viewer.imageryLayers.removeAll();
+  if (type === 'satellite') {
+    viewer.imageryLayers.addImageryProvider(
+      new Cesium.UrlTemplateImageryProvider({
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        maximumLevel: 19,
+        credit: '© Esri, Maxar, Earthstar Geographics',
+      })
+    );
+  } else if (type === 'osm') {
+    viewer.imageryLayers.addImageryProvider(
+      new Cesium.UrlTemplateImageryProvider({
+        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        maximumLevel: 19,
+        credit: '© OpenStreetMap contributors',
+      })
+    );
+  } else if (type === 'dark') {
+    viewer.imageryLayers.addImageryProvider(
+      new Cesium.UrlTemplateImageryProvider({
+        url: 'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+        maximumLevel: 19,
+        credit: '© CARTO, © OpenStreetMap contributors',
+      })
+    );
+  } else {
+    throw new Error(`Unsupported basemap type '${type}'`);
+  }
+}
+
+// Default to high-resolution satellite imagery
+applyBasemap(APP.basemap);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. Coordinate Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function calculateElevation(z, baseElev, vExag, groundMode) {
+  const baseAlt = groundMode === 'ground' ? 0.0 : baseElev;
+  return baseAlt + (z - baseElev) * vExag;
+}
+
+// GeoJSON ring [[lon,lat]…] → flat Cesium degrees array
+function ringFlat(ring) {
+  const out = [];
+  for (const [lon, lat] of ring) { out.push(lon, lat); }
+  return out;
+}
+
+// GeoJSON ring + height → flat [lon,lat,h, …] for polylines
+function ringFlatH(ring, h) {
+  const out = [];
+  for (const [lon, lat] of ring) { out.push(lon, lat, h); }
+  return out;
+}
+
+function geomToHierarchies(geometry) {
+  const result = [];
+  if (geometry.type === 'Polygon') {
+    const outer = Cesium.Cartesian3.fromDegreesArray(ringFlat(geometry.coordinates[0]));
+    const holes = geometry.coordinates.slice(1).map(r =>
+      new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ringFlat(r)))
+    );
+    result.push(new Cesium.PolygonHierarchy(outer, holes));
+  } else if (geometry.type === 'MultiPolygon') {
+    for (const poly of geometry.coordinates) {
+      const outer = Cesium.Cartesian3.fromDegreesArray(ringFlat(poly[0]));
+      const holes = poly.slice(1).map(r =>
+        new Cesium.PolygonHierarchy(Cesium.Cartesian3.fromDegreesArray(ringFlat(r)))
+      );
+      result.push(new Cesium.PolygonHierarchy(outer, holes));
+    }
+  }
+  return result;
+}
+
+function geomToPolylinePositions(geometry, height, clamp) {
+  const result = [];
+  if (geometry.type === 'LineString') {
+    if (clamp) {
+      result.push(Cesium.Cartesian3.fromDegreesArray(ringFlat(geometry.coordinates)));
+    } else {
+      result.push(Cesium.Cartesian3.fromDegreesArrayHeights(ringFlatH(geometry.coordinates, height)));
+    }
+  } else if (geometry.type === 'MultiLineString') {
+    for (const line of geometry.coordinates) {
+      if (clamp) {
+        result.push(Cesium.Cartesian3.fromDegreesArray(ringFlat(line)));
+      } else {
+        result.push(Cesium.Cartesian3.fromDegreesArrayHeights(ringFlatH(line, height)));
+      }
+    }
+  }
+  return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. Entity Management
+// ─────────────────────────────────────────────────────────────────────────────
+function addSliceEntity(hierarchy, zLow, zHigh, color, sliceProps) {
+  const ent = viewer.entities.add({
+    polygon: {
+      hierarchy,
+      height:               zLow,
+      extrudedHeight:       zHigh,
+      material:             color,
+      outline:              true,
+      outlineColor:         Cesium.Color.BLACK.withAlpha(0.25),
+      outlineWidth:         1.2,
+      perPositionHeight:    false,
+      closeTop:             true,
+      closeBottom:          true,
+    },
+  });
+  ent._sliceProps = sliceProps;
+  return ent;
+}
+
+function addPolylineEntity(positions, props, clamped) {
+  const ent = viewer.entities.add({
+    polyline: {
+      positions,
+      width: 2.0,
+      material: new Cesium.PolylineDashMaterialProperty({
+        color:     Cesium.Color.WHITE.withAlpha(0.75),
+        dashLength: 16,
+        dashPattern: 0xff00,
+      }),
+      clampToGround: clamped,
+    },
+  });
+  ent._contourProps = props;
+  return ent;
+}
+
+let _rebuildTimer = null;
+function scheduleRebuild(immediate) {
+  clearTimeout(_rebuildTimer);
+  _rebuildTimer = setTimeout(rebuildEntities, immediate ? 0 : 100);
+}
+
+function rebuildEntities() {
+  viewer.entities.removeAll();
+  APP.fillEntity = null;
+  if (!APP.data) return;
+
+  const S          = APP.summary;
+  const maxDepth   = S.total_depth_m;
+  const baseElev   = S.base_elev;
+  const crestElev  = S.crest_elev;
+  const vExag      = APP.vExag;
+  const scheme     = APP.scheme;
+  const groundMode = APP.groundMode;
+  const targetType = APP.mode === 'hollow' ? 'slice_hollow' : 'slice_solid';
+
+  // ── Slice polygons ────────────────────────────────────────────────────────
+  const slices = APP.data.features.filter(f => f.properties.layer_type === targetType);
+  for (const feat of slices) {
+    const p    = feat.properties;
+    const t    = Math.max(0, Math.min(1, p.depth_mean_m / maxDepth));
+    const col  = lerpColor(t, scheme);
+    const zLo  = calculateElevation(p.z_low,  baseElev, vExag, groundMode);
+    const zHi  = calculateElevation(p.z_high, baseElev, vExag, groundMode);
+
+    for (const hier of geomToHierarchies(feat.geometry)) {
+      addSliceEntity(hier, zLo, zHi, col, p);
+    }
+  }
+
+  // ── Contour lines ─────────────────────────────────────────────────────────
+  if (APP.showContours) {
+    const clines = APP.data.features.filter(f => f.properties.layer_type === 'contour_line');
+    for (const feat of clines) {
+      const elev = feat.properties.elevation;
+      const h    = calculateElevation(elev, baseElev, vExag, groundMode) + 0.35;
+      for (const pos of geomToPolylinePositions(feat.geometry, h, false)) {
+        addPolylineEntity(pos, feat.properties, false);
+      }
+    }
+  }
+
+  // ── Fill entity ───────────────────────────────────────────────────────────
+  if (APP.fillEnabled) {
+    _rebuildFill(baseElev, crestElev, vExag, groundMode);
+  }
+
+  updateLegend();
+}
+
+function _rebuildFill(baseElev, crestElev, vExag, groundMode) {
+  if (APP.fillEntity) { viewer.entities.remove(APP.fillEntity); APP.fillEntity = null; }
+  if (!APP.fillEnabled || !APP.data) return;
+
+  const fillElev = baseElev + APP.fillFraction * (crestElev - baseElev);
+  if (fillElev <= baseElev + 0.01) return;
+
+  const solidFeatures = APP.data.features.filter(f => f.properties.layer_type === 'slice_solid');
+  if (!solidFeatures.length) return;
+
+  // Base feature corresponds to stage 1 (lowest elevation stage)
+  const baseFeature = solidFeatures.find(f => f.properties.stage_id === 1) || solidFeatures[0];
+
+  const zFill = calculateElevation(fillElev, baseElev, vExag, groundMode);
+  const zBase = calculateElevation(baseElev, baseElev, vExag, groundMode);
+
+  const hierarchies = geomToHierarchies(baseFeature.geometry);
+  if (!hierarchies.length) return;
+
+  APP.fillEntity = viewer.entities.add({
+    polygon: {
+      hierarchy:      hierarchies[0],
+      height:         zBase,
+      extrudedHeight: zFill,
+      material:       new Cesium.ColorMaterialProperty(
+        Cesium.Color.fromCssColorString('#1a78c2').withAlpha(0.45)
+      ),
+      outline: false,
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Legend Bar
+// ─────────────────────────────────────────────────────────────────────────────
+function updateLegend() {
+  const canvas = document.getElementById('legendCanvas');
+  const ctx    = canvas.getContext('2d');
+  const W = 200, H = 10;
+  canvas.width = W; canvas.height = H;
+  const grad = ctx.createLinearGradient(0, 0, W, 0);
+  const stops = SCHEMES[APP.scheme];
+  for (const [t, hex] of stops) {
+    grad.addColorStop(t, hex);
+  }
+  ctx.fillStyle = grad;
+  ctx.roundRect(0, 0, W, H, 5);
+  ctx.fill();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. UI State Mutators
+// ─────────────────────────────────────────────────────────────────────────────
+function setBasemap(type) {
+  APP.basemap = type;
+  applyBasemap(type);
+}
+
+function setGroundMode(mode) {
+  APP.groundMode = mode;
+  scheduleRebuild(true);
+}
+
+function setMode(m) {
+  APP.mode = m;
+  document.getElementById('btnHollow').classList.toggle('active', m === 'hollow');
+  document.getElementById('btnSolid') .classList.toggle('active', m === 'solid');
+  scheduleRebuild(true);
+}
+
+function setScheme(s) {
+  APP.scheme = s;
+  scheduleRebuild(true);
+}
+
+function setVE(val) {
+  APP.vExag = val;
+  document.getElementById('veVal').textContent = val.toFixed(1) + '×';
+  scheduleRebuild(false);
+}
+
+function setFill(val) {
+  APP.fillFraction = val / 100;
+  const S = APP.summary;
+  if (S && APP.fillEnabled) {
+    const lev = S.base_elev + APP.fillFraction * (S.crest_elev - S.base_elev);
+    document.getElementById('fillVal').textContent = lev.toFixed(1) + ' m';
+    _rebuildFill(S.base_elev, S.crest_elev, APP.vExag, APP.groundMode);
+  }
+}
+
+function toggleFill(enabled) {
+  APP.fillEnabled = enabled;
+  const S = APP.summary;
+  if (!enabled) {
+    document.getElementById('fillVal').textContent = 'Off';
+    if (APP.fillEntity) { viewer.entities.remove(APP.fillEntity); APP.fillEntity = null; }
+  } else if (S) {
+    const lev = S.base_elev + APP.fillFraction * (S.crest_elev - S.base_elev);
+    document.getElementById('fillVal').textContent = lev.toFixed(1) + ' m';
+    _rebuildFill(S.base_elev, S.crest_elev, APP.vExag, APP.groundMode);
+  }
+}
+
+function toggleContours() {
+  APP.showContours = !APP.showContours;
+  const btn = document.getElementById('btnContours');
+  btn.textContent = APP.showContours ? 'Contour Lines On' : 'Contour Lines Off';
+  btn.classList.toggle('active', APP.showContours);
+  scheduleRebuild(true);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Camera Presets
+// ─────────────────────────────────────────────────────────────────────────────
+function cameraPreset(name) {
+  if (!APP.summary) return;
+  const { center_lon: lon, center_lat: lat, bounds } = APP.summary;
+
+  const spanLon = (bounds[2] - bounds[0]) * 111_000;
+  const spanLat = (bounds[3] - bounds[1]) * 111_000;
+  const span    = Math.max(spanLon, spanLat);
+  const alt     = Math.max(span * 1.6, 400);
+
+  const FLY = (destination, heading, pitch) =>
+    viewer.camera.flyTo({
+      destination,
+      orientation: { heading: Cesium.Math.toRadians(heading),
+                     pitch:   Cesium.Math.toRadians(pitch), roll: 0 },
+      duration: 1.4,
+    });
+
+  if (name === 'plan')
+    FLY(Cesium.Cartesian3.fromDegrees(lon, lat, alt * 1.2),      0, -88);
+  else if (name === 'se')
+    FLY(Cesium.Cartesian3.fromDegrees(lon+0.012, lat-0.012, alt * 0.55), 315, -38);
+  else if (name === 'nw')
+    FLY(Cesium.Cartesian3.fromDegrees(lon-0.012, lat+0.012, alt * 0.55), 135, -38);
+  else if (name === 'section')
+    FLY(Cesium.Cartesian3.fromDegrees(lon+0.018, lat, alt * 0.35),       270, -18);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Hover / Click Inspection
+// ─────────────────────────────────────────────────────────────────────────────
+const infoCard  = document.getElementById('infoCard');
+const handler   = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+
+function fmt(n, d=0) { return Number(n).toLocaleString(undefined, {maximumFractionDigits:d}); }
+
+function showSliceInfo(p) {
+  if (!p) { infoCard.style.display = 'none'; return; }
+  document.getElementById('infoTitle').textContent = p.label;
+  document.getElementById('iElev')   .textContent = `${p.z_low.toFixed(1)} m – ${p.z_high.toFixed(1)} m`;
+  document.getElementById('iDepth')  .textContent = `${p.depth_mean_m.toFixed(2)} m`;
+  document.getElementById('iArea')   .textContent = `${fmt(p.area_ha,3)} ha  (${fmt(p.area_m2,0)} m²)`;
+  document.getElementById('iVol')    .textContent = `${fmt(p.vol_m3,0)} m³`;
+  document.getElementById('iCumVol') .textContent = `${fmt(p.cum_m3,0)} m³`;
+  document.getElementById('iAcft')   .textContent = `${fmt(p.cum_acft,2)} ac·ft`;
+  infoCard.style.display = 'block';
+}
+
+handler.setInputAction(mv => {
+  const hit = viewer.scene.pick(mv.endPosition);
+  if (Cesium.defined(hit) && hit.id && hit.id._sliceProps) {
+    showSliceInfo(hit.id._sliceProps);
+  } else {
+    infoCard.style.display = 'none';
+  }
+}, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+handler.setInputAction(clk => {
+  const hit = viewer.scene.pick(clk.position);
+  if (Cesium.defined(hit) && hit.id && hit.id._sliceProps) {
+    showSliceInfo(hit.id._sliceProps);
+  }
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. Stats Card
+// ─────────────────────────────────────────────────────────────────────────────
+function populateStats(S) {
+  document.getElementById('statsSite') .textContent = `📍 ${S.site_name.toUpperCase()}`;
+  document.getElementById('sVol')      .textContent = `${fmt(S.total_vol_m3,0)} m³`;
+  document.getElementById('sAcft')     .textContent = `${fmt(S.total_vol_acft,2)} ac·ft`;
+  document.getElementById('sLayers')  .textContent = S.num_slices;
+  document.getElementById('sCrest')   .textContent = `${S.crest_elev.toFixed(2)} m`;
+  document.getElementById('sBase')    .textContent = `${S.base_elev.toFixed(2)} m`;
+  document.getElementById('sDepth')   .textContent = `${S.total_depth_m.toFixed(2)} m`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. Initial Camera Frame
+// ─────────────────────────────────────────────────────────────────────────────
+function frameInitialView() {
+  const S = APP.summary;
+  if (!S) return;
+  const spanLon = (S.bounds[2] - S.bounds[0]) * 111_000;
+  const spanLat = (S.bounds[3] - S.bounds[1]) * 111_000;
+  const alt     = Math.max(Math.max(spanLon, spanLat) * 1.8, 500);
+  viewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(S.center_lon, S.center_lat - 0.008, alt),
+    orientation: {
+      heading: Cesium.Math.toRadians(0),
+      pitch:   Cesium.Math.toRadians(-50),
+      roll:    0,
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. Strict GeoJSON Schema Validation
+// ─────────────────────────────────────────────────────────────────────────────
+function validateGeoJSON(geojson) {
+  if (!geojson || geojson.type !== 'FeatureCollection') {
+    throw new Error('Root GeoJSON object must be of type "FeatureCollection".');
+  }
+  if (!geojson.properties || typeof geojson.properties !== 'object') {
+    throw new Error('Missing top-level "properties" summary object in GeoJSON.');
+  }
+
+  const reqSummary = [
+    'site_name', 'prefix', 'base_elev', 'crest_elev',
+    'total_depth_m', 'total_vol_m3', 'total_vol_acft', 'total_vol_cuft',
+    'num_slices', 'center_lon', 'center_lat', 'bounds'
+  ];
+  for (const key of reqSummary) {
+    if (!geojson.properties.hasOwnProperty(key) || geojson.properties[key] === null || geojson.properties[key] === undefined) {
+      throw new Error(`Missing required summary property: '${key}' in viewer_data.geojson`);
+    }
+  }
+
+  if (!Array.isArray(geojson.properties.bounds) || geojson.properties.bounds.length !== 4) {
+    throw new Error('Property "bounds" must be an array of 4 coordinates [minx, miny, maxx, maxy].');
+  }
+
+  if (!Array.isArray(geojson.features) || geojson.features.length === 0) {
+    throw new Error('Missing or empty "features" array in viewer_data.geojson.');
+  }
+
+  const reqSliceProps = ['stage_id', 'z_low', 'z_high', 'delta_h', 'area_m2', 'vol_m3', 'cum_m3', 'depth_mean_m', 'label'];
+  for (let i = 0; i < geojson.features.length; i++) {
+    const feat = geojson.features[i];
+    if (feat.type !== 'Feature' || !feat.properties || !feat.geometry) {
+      throw new Error(`Invalid feature at index ${i}: must have type="Feature", geometry, and properties.`);
+    }
+    const lt = feat.properties.layer_type;
+    if (!['slice_hollow', 'slice_solid', 'contour_line'].includes(lt)) {
+      throw new Error(`Feature at index ${i} has invalid layer_type: '${lt}'. Must be 'slice_hollow', 'slice_solid', or 'contour_line'.`);
+    }
+
+    if (lt === 'slice_hollow' || lt === 'slice_solid') {
+      for (const k of reqSliceProps) {
+        if (!feat.properties.hasOwnProperty(k) || typeof feat.properties[k] === 'undefined') {
+          throw new Error(`Feature at index ${i} (${lt}) is missing required property '${k}'.`);
+        }
+      }
+    } else if (lt === 'contour_line') {
+      if (typeof feat.properties.elevation !== 'number' || isNaN(feat.properties.elevation)) {
+        throw new Error(`Contour feature at index ${i} has invalid/missing numeric 'elevation'.`);
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. Data Loading
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadData() {
+  const overlay  = document.getElementById('loadingOverlay');
+  const msgEl    = document.getElementById('loadingMsg');
+  const errorBox = document.getElementById('errorBox');
+
+  try {
+    msgEl.textContent = 'Fetching viewer_data.geojson…';
+    const resp = await fetch('./viewer_data.geojson');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} – ${resp.statusText}`);
+
+    msgEl.textContent = 'Validating GeoJSON schema…';
+    const geojson = await resp.json();
+
+    // Strict validation — fail loudly on invalid schema
+    validateGeoJSON(geojson);
+
+    APP.data    = geojson;
+    APP.summary = geojson.properties;
+
+    populateStats(APP.summary);
+
+    msgEl.textContent = 'Building 3D entities…';
+    rebuildEntities();
+
+    overlay.style.display = 'none';
+    frameInitialView();
+
+  } catch (err) {
+    overlay.style.display = 'none';
+    errorBox.style.display = 'block';
+    errorBox.innerHTML = `
+      <strong>⚠ Viewer Data Error</strong><br><br>
+      <code>${err.message}</code><br><br>
+      <em>Ensure that <code>export_viewer_data.py</code> generated a valid standardized <code>viewer_data.geojson</code>.</em><br><br>
+      To serve locally:<br>
+      <code>python3 -m http.server 8080</code>
+    `;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bootstrap
+// ─────────────────────────────────────────────────────────────────────────────
+updateLegend();
+loadData();
+</script>
+</body>
+</html>

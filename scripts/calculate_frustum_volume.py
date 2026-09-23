@@ -8,6 +8,7 @@ of any contour dataset using the Prismoidal Frustum Method:
 
 Features:
 - Dataset-agnostic: auto-detects CRS, elevation attributes, boundary morphology, and vertical intervals.
+- Flexible Column Mapping: options for mapping all columns (--elevation-col, --geometry-col, --boundary-col, --col-map).
 - Universal topological engine supporting 3 solver modes (auto-detected or user-specified):
     1. 'ring': Topological ring-snap for closed internal contour rings (e.g. South basin).
     2. 'split': Boundary-cut planar partition for mining concession blocks (e.g. Hassan Abdal 10B).
@@ -19,6 +20,23 @@ Features:
     3. <prefix>_frustum_volumetric_report.csv    (engineering schedule)
     4. <prefix>_stage_storage_curves.png         (stage-area & stage-storage curves)
     5. <prefix>_contour_slices_map.png           (2D planimetric stage map)
+
+Standard Input Columns & Mapping Options
+-----------------------------------------
+The input shapefile requires:
+
+  Column Role   Default Candidates                        CLI Mapping Flags
+  -----------   ---------------------------------------   ---------------------------------------------
+  Elevation     elevation, elev, contour, z, height,      --elevation-col / --elev-col / -e
+                level                                     --col-map elevation=<col>
+  Geometry      geometry, geom, shape, the_geom           --geometry-col / --geom-col / -g
+                                                          --col-map geometry=<col>
+  Boundary      (Optional embedded indicator: ELEV=0.0)   --boundary-col / --bnd-col
+  (Embedded)                                              --boundary-val / --bnd-val
+                                                          --col-map boundary=<col>,boundary_val=<val>
+
+If any required column is missing, the script halts with a detailed error report
+listing available columns, candidates tried, and the exact mapping commands to fix it.
 """
 
 import os
@@ -39,11 +57,46 @@ M3_TO_ACRE_FEET = 0.000810713194
 M3_TO_CUFT = 35.31466672148859
 DEFAULT_CLOSE_DIST = 25.0
 
+# Standard candidate elevation column names (lower-case; used for auto-detection)
+STANDARD_ELEV_CANDIDATES = ["elevation", "elev", "contour", "z", "height", "level"]
+STANDARD_GEOM_CANDIDATES = ["geometry", "geom", "shape", "the_geom"]
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_col_map(col_map_str):
+    """Parse key=value pairs from a column mapping string."""
+    mapping = {}
+    if not col_map_str:
+        return mapping
+    pairs = [p.strip() for p in col_map_str.replace(";", ",").split(",") if p.strip()]
+    for pair in pairs:
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            mapping[k.strip().lower()] = v.strip()
+        elif ":" in pair:
+            k, v = pair.split(":", 1)
+            mapping[k.strip().lower()] = v.strip()
+    return mapping
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Universal Contour Prismoidal Frustum Volumetric Analysis"
+        description="Universal Contour Prismoidal Frustum Volumetric Analysis",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Standard Required Input Columns & Mapping Flags
+------------------------------------------------
+  --elevation-col / --elev-col / -e   : Elevation column name (or in --col-map)
+  --geometry-col  / --geom-col / -g   : Geometry column name (or in --col-map)
+  --boundary-col  / --bnd-col         : Embedded boundary attribute column (e.g. TYPE, ELEVATION)
+  --boundary-val  / --bnd-val         : Value in boundary column indicating boundary feature (default: 0.0)
+  --col-map       / --column-map      : Generic key=val mapping string, e.g. "elevation=Z,geom=the_geom"
+        """
     )
+    # Required inputs
     parser.add_argument(
         "--input", "-i",
         required=True,
@@ -54,21 +107,59 @@ def parse_args():
         default=None,
         help="Optional path to separate boundary polygon shapefile. If omitted, auto-detected from input."
     )
+
+    # Output configuration
     parser.add_argument(
         "--output-dir", "-o",
         default=None,
-        help="Target output directory. Defaults to <input_parent>/output."
+        help="Target output directory. Defaults to outputs/<site_name>/."
     )
     parser.add_argument(
         "--prefix", "-p",
         default=None,
         help="Prefix for output filenames. Defaults to shapefile stem in lowercase."
     )
-    parser.add_argument(
-        "--elev-col", "-e",
-        default=None,
-        help="Name of elevation column. If omitted, auto-detected."
+
+    # Column mapping options for all columns
+    col_group = parser.add_argument_group(
+        "Column Mapping Options",
+        "Override / map input column names if your dataset uses non-standard names."
     )
+    col_group.add_argument(
+        "--elevation-col", "--elev-col", "-e",
+        dest="elev_col",
+        default=None,
+        help=(
+            "Elevation attribute column. Auto-detected from: "
+            + " | ".join(STANDARD_ELEV_CANDIDATES)
+        )
+    )
+    col_group.add_argument(
+        "--geometry-col", "--geom-col", "-g",
+        dest="geom_col",
+        default=None,
+        help="Geometry column. Defaults to active geometry or 'geometry' / 'geom' / 'shape'."
+    )
+    col_group.add_argument(
+        "--boundary-col", "--bnd-col",
+        dest="bnd_col",
+        default=None,
+        help="Embedded boundary attribute column (e.g., 'TYPE', 'FEATURE', 'ELEVATION')."
+    )
+    col_group.add_argument(
+        "--boundary-val", "--bnd-val",
+        dest="bnd_val",
+        default=None,
+        help="Value in --boundary-col indicating a boundary feature (default: '0.0' or '0')."
+    )
+    col_group.add_argument(
+        "--col-map", "--column-map",
+        dest="col_map",
+        default=None,
+        help="Generic column mapping string, e.g. 'elevation=Z,geom=the_geom,boundary=TYPE,boundary_val=bnd'."
+    )
+
+    # Solver & geometric parameters
     parser.add_argument(
         "--target-epsg",
         default=None,
@@ -95,39 +186,270 @@ def parse_args():
     return parser.parse_args()
 
 
+# ---------------------------------------------------------------------------
+# COLUMN VALIDATION & MAPPING
+# ---------------------------------------------------------------------------
+
+def validate_and_map_columns(gdf, input_path, elev_override=None, geom_override=None,
+                             bnd_col_override=None, bnd_val_override=None, col_map_override=None):
+    """
+    Validate and map all required and optional input columns.
+
+    Parameters
+    ----------
+    gdf : GeoDataFrame
+        The raw GeoDataFrame loaded from the shapefile.
+    input_path : str
+        Path to the input file.
+    elev_override : str or None
+        Explicit elevation column from CLI.
+    geom_override : str or None
+        Explicit geometry column from CLI.
+    bnd_col_override : str or None
+        Explicit boundary column from CLI.
+    bnd_val_override : str or None
+        Explicit boundary indicator value.
+    col_map_override : str or None
+        Generic key=value mapping string.
+
+    Returns
+    -------
+    mapped_cols : dict
+        Dictionary containing mapped column names and boundary value:
+        {
+            'geometry': <geom_col_name>,
+            'elevation': <elev_col_name>,
+            'boundary_col': <bnd_col_name_or_None>,
+            'boundary_val': <bnd_val_or_None>
+        }
+    """
+    errors = []
+    warnings = []
+    present_cols = list(gdf.columns)
+    col_lower_map = {c.strip().lower(): c for c in present_cols}
+
+    # Parse generic mapping string
+    col_map = parse_col_map(col_map_override)
+
+    # ── 1. Resolve Geometry Column ──────────────────────────────────────────
+    geom_candidate = (
+        geom_override
+        or col_map.get("geometry")
+        or col_map.get("geom")
+        or col_map.get("shape")
+        or col_map.get("the_geom")
+    )
+    resolved_geom_col = None
+
+    if geom_candidate:
+        if geom_candidate in present_cols:
+            resolved_geom_col = geom_candidate
+        elif geom_candidate.lower() in col_lower_map:
+            resolved_geom_col = col_lower_map[geom_candidate.lower()]
+        else:
+            errors.append(
+                f"  [MISSING] Geometry column '{geom_candidate}' specified via mapping was not found in file."
+            )
+    else:
+        # Check active geometry or candidate column names
+        if hasattr(gdf, "geometry") and gdf.geometry.name in present_cols:
+            resolved_geom_col = gdf.geometry.name
+        else:
+            for gcand in STANDARD_GEOM_CANDIDATES:
+                if gcand in col_lower_map:
+                    resolved_geom_col = col_lower_map[gcand]
+                    break
+
+    if not resolved_geom_col and not errors:
+        errors.append(
+            "  [MISSING] Geometry column — no standard geometry column ('geometry', 'geom', 'shape') found.\n"
+            "            Specify the geometry column with --geometry-col <name> or --col-map geometry=<name>."
+        )
+    elif resolved_geom_col and gdf[resolved_geom_col].is_empty.all():
+        errors.append(
+            f"  [INVALID] Geometry column '{resolved_geom_col}' has all empty geometries. Check that the file is not corrupt."
+        )
+
+    # ── 2. Resolve Elevation Column ─────────────────────────────────────────
+    elev_candidate = (
+        elev_override
+        or col_map.get("elevation")
+        or col_map.get("elev")
+        or col_map.get("z")
+        or col_map.get("contour")
+        or col_map.get("height")
+        or col_map.get("level")
+    )
+    resolved_elev_col = None
+
+    if elev_candidate:
+        if elev_candidate in present_cols:
+            resolved_elev_col = elev_candidate
+        elif elev_candidate.lower() in col_lower_map:
+            resolved_elev_col = col_lower_map[elev_candidate.lower()]
+        else:
+            errors.append(
+                f"  [MISSING] Elevation column '{elev_candidate}' specified via mapping was not found in file."
+            )
+    else:
+        # Auto-detection: exact matches first
+        for cand in STANDARD_ELEV_CANDIDATES:
+            if cand in col_lower_map:
+                resolved_elev_col = col_lower_map[cand]
+                break
+
+        # Partial matches
+        if resolved_elev_col is None:
+            for cand in STANDARD_ELEV_CANDIDATES:
+                for col in present_cols:
+                    if cand in col.lower() and col.lower() != str(resolved_geom_col).lower():
+                        resolved_elev_col = col
+                        break
+                if resolved_elev_col:
+                    break
+
+        # Fallback to numeric column with most unique values
+        if resolved_elev_col is None:
+            numeric_cols = [
+                c for c in gdf.select_dtypes(include=[np.number]).columns
+                if c != resolved_geom_col
+            ]
+            if numeric_cols:
+                resolved_elev_col = max(numeric_cols, key=lambda c: gdf[c].nunique())
+                warnings.append(
+                    f"  [WARNING] No standard elevation column name found. "
+                    f"Auto-mapped to numeric column with highest variation: '{resolved_elev_col}'. "
+                    f"Use --elevation-col <name> to map explicitly if needed."
+                )
+            else:
+                errors.append(
+                    "  [MISSING] Elevation column — no numeric or standard elevation column found.\n"
+                    "            Standard accepted names:\n"
+                    "              " + " | ".join(STANDARD_ELEV_CANDIDATES) + "\n"
+                    "            Map your elevation column using: --elevation-col <name> (or --elev-col / -e)."
+                )
+
+    # Elevation dtype & validity check
+    if resolved_elev_col and resolved_elev_col in present_cols:
+        if not pd.api.types.is_numeric_dtype(gdf[resolved_elev_col]):
+            # Attempt coercion to numeric
+            coerced = pd.to_numeric(gdf[resolved_elev_col], errors="coerce")
+            if coerced.notna().sum() > 0:
+                warnings.append(
+                    f"  [WARNING] Elevation column '{resolved_elev_col}' contains non-numeric strings; coerced valid entries to float."
+                )
+            else:
+                errors.append(
+                    f"  [INVALID] Elevation column '{resolved_elev_col}' is non-numeric (dtype: {gdf[resolved_elev_col].dtype}) "
+                    f"and could not be converted to numbers."
+                )
+        elif gdf[resolved_elev_col].isna().all():
+            errors.append(
+                f"  [INVALID] Elevation column '{resolved_elev_col}' contains only null/NaN values."
+            )
+        elif gdf[resolved_elev_col].isna().any():
+            n_null = int(gdf[resolved_elev_col].isna().sum())
+            warnings.append(
+                f"  [WARNING] Elevation column '{resolved_elev_col}' has {n_null} null value(s); these features will be ignored."
+            )
+
+    # ── 3. Resolve Embedded Boundary Column / Value (Optional) ──────────────
+    bnd_col_candidate = (
+        bnd_col_override
+        or col_map.get("boundary")
+        or col_map.get("bnd")
+        or col_map.get("boundary_col")
+        or col_map.get("bnd_col")
+    )
+    bnd_val_candidate = (
+        bnd_val_override
+        or col_map.get("boundary_val")
+        or col_map.get("bnd_val")
+    )
+
+    resolved_bnd_col = None
+    if bnd_col_candidate:
+        if bnd_col_candidate in present_cols:
+            resolved_bnd_col = bnd_col_candidate
+        elif bnd_col_candidate.lower() in col_lower_map:
+            resolved_bnd_col = col_lower_map[bnd_col_candidate.lower()]
+        else:
+            errors.append(
+                f"  [MISSING] Boundary column '{bnd_col_candidate}' specified via mapping was not found in file."
+            )
+
+    # ── Print warnings (non-fatal) ──────────────────────────────────────────
+    for w in warnings:
+        print(w)
+
+    # ── Fail fast on errors ─────────────────────────────────────────────────
+    if errors:
+        sep = "=" * 80
+        print(f"\n{sep}")
+        print("ERROR: INPUT COLUMN VALIDATION & MAPPING FAILED")
+        print(sep)
+        print(f"  File : {input_path}")
+        print(f"  Total features   : {len(gdf)}")
+        print(f"  Columns present  : {present_cols}")
+        print()
+        print("  Issues encountered:")
+        for err in errors:
+            print(err)
+        print()
+        print("  COLUMN MAPPING OPTIONS AVAILABLE:")
+        print("  ---------------------------------")
+        print("  To map elevation column : --elevation-col <col_name>  (or --elev-col / -e)")
+        print("  To map geometry column  : --geometry-col <col_name>   (or --geom-col / -g)")
+        print("  To map boundary column  : --boundary-col <col_name>   (and optionally --boundary-val <val>)")
+        print("  To map multiple at once : --col-map 'elevation=<col>,geometry=<geom>,boundary=<bnd>'")
+        print(sep)
+        sys.exit(1)
+
+    return {
+        "geometry": resolved_geom_col,
+        "elevation": resolved_elev_col,
+        "boundary_col": resolved_bnd_col,
+        "boundary_val": bnd_val_candidate,
+    }
+
+
 def detect_elevation_column(gdf, override=None):
-    """Dynamically identify the elevation attribute column."""
+    """Fallback / helper to detect elevation column."""
     if override:
         if override in gdf.columns:
             return override
-        raise ValueError(f"Specified elevation column '{override}' not found in columns: {list(gdf.columns)}")
+        raise ValueError(f"Elevation column '{override}' not found in columns: {list(gdf.columns)}")
 
-    candidates = ['elevation', 'elev', 'contour', 'z', 'height', 'level']
-    for cand in candidates:
+    col_lower_map = {c.strip().lower(): c for c in gdf.columns}
+    for cand in STANDARD_ELEV_CANDIDATES:
+        if cand in col_lower_map:
+            return col_lower_map[cand]
+
+    for cand in STANDARD_ELEV_CANDIDATES:
         for col in gdf.columns:
-            if col.strip().lower() == cand:
+            if cand in col.lower():
                 return col
 
-    for col in gdf.columns:
-        if any(cand in col.lower() for cand in candidates):
-            return col
-
-    numeric_cols = [c for c in gdf.select_dtypes(include=[np.number]).columns if c != 'geometry']
+    numeric_cols = [c for c in gdf.select_dtypes(include=[np.number]).columns if c != "geometry"]
     if numeric_cols:
         return max(numeric_cols, key=lambda c: gdf[c].nunique())
 
-    raise ValueError(f"Could not automatically detect elevation column from attributes: {list(gdf.columns)}")
+    raise ValueError(f"Could not detect elevation column in: {list(gdf.columns)}")
 
+
+# ---------------------------------------------------------------------------
+# GEOMETRY UTILITIES
+# ---------------------------------------------------------------------------
 
 def _all_lines(geom):
     """Flatten a (Multi)LineString into a list of LineStrings."""
     if geom is None or geom.is_empty:
         return []
-    if geom.geom_type == 'LineString':
+    if geom.geom_type == "LineString":
         return [geom]
-    if geom.geom_type == 'MultiLineString':
+    if geom.geom_type == "MultiLineString":
         return list(geom.geoms)
-    if geom.geom_type == 'GeometryCollection':
+    if geom.geom_type == "GeometryCollection":
         out = []
         for g in geom.geoms:
             out.extend(_all_lines(g))
@@ -168,10 +490,10 @@ def clean_polygon(geom):
         return Polygon()
     if not geom.is_valid:
         geom = shapely.make_valid(geom)
-    if geom.geom_type in ('Polygon', 'MultiPolygon'):
+    if geom.geom_type in ("Polygon", "MultiPolygon"):
         return geom
-    if geom.geom_type == 'GeometryCollection':
-        polys = [g for g in geom.geoms if g.geom_type in ('Polygon', 'MultiPolygon') and g.area > 0]
+    if geom.geom_type == "GeometryCollection":
+        polys = [g for g in geom.geoms if g.geom_type in ("Polygon", "MultiPolygon") and g.area > 0]
         if polys:
             u = unary_union(polys)
             return u if u.is_valid else shapely.make_valid(u)
@@ -193,18 +515,62 @@ def _robust_union(geoms):
     return merged
 
 
-def analyze_and_load(input_path, boundary_path=None, elev_col_override=None, target_epsg_override=None):
-    """Load, inspect, and project contour and boundary datasets."""
-    print("=" * 80)
+# ---------------------------------------------------------------------------
+# STAGE 1: LOAD & PROJECT
+# ---------------------------------------------------------------------------
+
+def analyze_and_load(input_path, boundary_path=None, elev_col_override=None, geom_col_override=None,
+                     bnd_col_override=None, bnd_val_override=None, col_map_override=None,
+                     target_epsg_override=None):
+    """Load, validate, map columns, inspect, and project contour and boundary datasets."""
+    sep = "=" * 80
+    print(sep)
     print("STAGE 1: INPUT DATA ANALYSIS & PROJECTION")
+    print(sep)
+
     if not os.path.exists(input_path):
-        raise FileNotFoundError(f"Input file not found: {input_path}")
+        print(f"\nERROR: Input file not found: {input_path}")
+        sys.exit(1)
 
     gdf_raw = gpd.read_file(input_path)
-    print(f"  Input Dataset: {input_path}")
-    print(f"  Total Features: {len(gdf_raw)}")
-    print(f"  Source CRS: {gdf_raw.crs}")
+    print(f"  File             : {input_path}")
+    print(f"  Total features   : {len(gdf_raw)}")
+    print(f"  Columns present  : {list(gdf_raw.columns)}")
+    print(f"  Source CRS       : {gdf_raw.crs}")
 
+    # Column Mapping & Schema Validation
+    mapping = validate_and_map_columns(
+        gdf=gdf_raw,
+        input_path=input_path,
+        elev_override=elev_col_override,
+        geom_override=geom_col_override,
+        bnd_col_override=bnd_col_override,
+        bnd_val_override=bnd_val_override,
+        col_map_override=col_map_override,
+    )
+
+    geom_col = mapping["geometry"]
+    elev_col = mapping["elevation"]
+    bnd_col = mapping["boundary_col"]
+    bnd_val = mapping["boundary_val"]
+
+    print(f"  Mapped Geometry  : '{geom_col}'")
+    print(f"  Mapped Elevation : '{elev_col}' (dtype: {gdf_raw[elev_col].dtype})")
+    if bnd_col:
+        print(f"  Mapped Boundary  : column '{bnd_col}' (indicator value: '{bnd_val}')")
+
+    # Set active geometry if different
+    if gdf_raw.geometry.name != geom_col:
+        gdf_raw = gdf_raw.set_geometry(geom_col)
+
+    # Ensure numeric elevations and drop nulls
+    gdf_raw[elev_col] = pd.to_numeric(gdf_raw[elev_col], errors="coerce")
+    n_before = len(gdf_raw)
+    gdf_raw = gdf_raw.dropna(subset=[elev_col]).copy()
+    if len(gdf_raw) < n_before:
+        print(f"  Dropped {n_before - len(gdf_raw)} feature(s) with invalid/null elevations.")
+
+    # CRS & projection
     if target_epsg_override:
         target_crs = target_epsg_override
     elif gdf_raw.crs is not None and not gdf_raw.crs.is_geographic:
@@ -214,12 +580,14 @@ def analyze_and_load(input_path, boundary_path=None, elev_col_override=None, tar
             gdf_raw = gdf_raw.set_crs("EPSG:4326")
         target_crs = gdf_raw.estimate_utm_crs()
 
-    print(f"  Projected Metric CRS: {target_crs}")
+    print(f"  Projected CRS    : {target_crs}")
     gdf = gdf_raw.to_crs(target_crs)
-    gdf['geometry'] = shapely.force_2d(gdf.geometry.values)
+    gdf["geometry"] = shapely.force_2d(gdf.geometry.values)
 
-    elev_col = detect_elevation_column(gdf, elev_col_override)
-    print(f"  Elevation Attribute Column: '{elev_col}'")
+    # Elevation summary
+    elev_vals = gdf[elev_col].unique()
+    print(f"  Elevation range  : {gdf[elev_col].min():.2f} m  →  {gdf[elev_col].max():.2f} m")
+    print(f"  Unique elevations: {len(elev_vals)}")
 
     bnd_poly = None
     bnd_line = None
@@ -227,37 +595,49 @@ def analyze_and_load(input_path, boundary_path=None, elev_col_override=None, tar
         bnd_gdf = gpd.read_file(boundary_path).to_crs(target_crs)
         bnd_poly = clean_polygon(unary_union(bnd_gdf.geometry))
         bnd_line = bnd_poly.boundary
-        print(f"  Boundary: loaded from external file ({boundary_path})")
+        print(f"  Boundary source  : external file ({boundary_path})")
     else:
-        zero_rows = gdf[gdf[elev_col] == 0.0]
-        if len(zero_rows) > 0 and len(zero_rows) <= 2:
-            geom = zero_rows.geometry.iloc[0]
-            if geom.geom_type in ('Polygon', 'MultiPolygon'):
+        # Detect embedded boundary
+        if bnd_col:
+            if bnd_val is not None:
+                bnd_rows = gdf[gdf[bnd_col].astype(str) == str(bnd_val)]
+            else:
+                bnd_rows = gdf[gdf[bnd_col].astype(str).str.lower().isin(["boundary", "bnd", "perimeter", "0", "0.0"])]
+        else:
+            bnd_rows = gdf[gdf[elev_col] == 0.0]
+
+        if len(bnd_rows) > 0 and len(bnd_rows) <= 4:
+            geom = bnd_rows.geometry.iloc[0]
+            if geom.geom_type in ("Polygon", "MultiPolygon"):
                 bnd_poly = clean_polygon(geom)
                 bnd_line = bnd_poly.boundary
-            elif geom.geom_type == 'LineString':
+            elif geom.geom_type == "LineString":
                 bnd_line = geom
                 bnd_poly = Polygon(geom.coords) if geom.is_closed else Polygon()
-            elif geom.geom_type == 'MultiLineString':
+            elif geom.geom_type == "MultiLineString":
                 bnd_line = unary_union(list(geom.geoms))
                 closed = [l for l in geom.geoms if l.is_closed]
                 bnd_poly = Polygon(closed[0].coords) if closed else Polygon()
 
             if bnd_poly is not None and bnd_poly.is_valid and bnd_poly.area > 0:
-                print(f"  Boundary: auto-detected explicit boundary feature (ELEVATION == 0.0)")
+                print(f"  Boundary source  : auto-detected embedded boundary feature ({bnd_col or elev_col} == {bnd_val if bnd_col else '0.0'})")
 
     if bnd_poly is not None and bnd_poly.area > 0:
-        contours_gdf = gdf[gdf[elev_col] > 0.0].copy()
+        if bnd_col and bnd_val is not None:
+            contours_gdf = gdf[gdf[bnd_col].astype(str) != str(bnd_val)].copy()
+        else:
+            contours_gdf = gdf[gdf[elev_col] > 0.0].copy()
     else:
         contours_gdf = gdf.copy()
         u_lines = unary_union(contours_gdf.geometry)
         bnd_poly = clean_polygon(u_lines.convex_hull)
         bnd_line = bnd_poly.boundary
-        print("  Boundary: auto-derived convex envelope from contour extents")
+        print("  Boundary source  : auto-derived convex envelope from contour extents")
 
     bnd_poly = clean_polygon(bnd_poly)
-    print(f"  Boundary Footprint Area: {bnd_poly.area:,.2f} m² ({bnd_poly.area / 10000.0:.3f} ha)")
-    print(f"  Boundary Perimeter: {bnd_line.length:,.2f} m")
+    print(f"  Boundary area    : {bnd_poly.area:,.2f} m²  ({bnd_poly.area / 10000.0:.4f} ha)")
+    print(f"  Boundary perim.  : {bnd_line.length:,.2f} m")
+    print()
     return gdf, contours_gdf, elev_col, bnd_poly, bnd_line, str(target_crs)
 
 
@@ -385,28 +765,34 @@ def _solve_corridor_band(contours_gdf, elev_col, bnd_poly, unique_elevs, close_d
     return footprints
 
 
+# ---------------------------------------------------------------------------
+# STAGE 2: FOOTPRINT EXTRACTION
+# ---------------------------------------------------------------------------
+
 def solve_stage_footprints(contours_gdf, elev_col, bnd_poly, bnd_line, method="auto",
                            close_dist=DEFAULT_CLOSE_DIST, snap_tol=1.0):
     """
     Selects and runs the appropriate solver based on data topology or user choice.
     """
-    print("\n" + "=" * 80)
+    sep = "=" * 80
+    print(sep)
     print("STAGE 2: TOPOLOGICAL CONTOUR SLICING & FOOTPRINT EXTRACTION")
+    print(sep)
 
     unique_elevs = sorted(contours_gdf[elev_col].unique())
     max_elev = max(unique_elevs)
     min_elev = min(unique_elevs)
-    print(f"  Contour Elevation Range: {min_elev:.1f} m (Base) to {max_elev:.1f} m (Crest)")
-    print(f"  Number of Discrete Contour Stages: {len(unique_elevs)}")
+    print(f"  Elevation range  : {min_elev:.2f} m  →  {max_elev:.2f} m")
+    print(f"  Contour stages   : {len(unique_elevs)}")
 
     # Check crest closure
     crest_rows = contours_gdf[contours_gdf[elev_col] == max_elev]
     crest_lines = []
     for g in crest_rows.geometry:
         crest_lines.extend(_all_lines(g))
-    has_closed_crest = any(l.is_ring for l in crest_lines if hasattr(l, 'is_ring'))
+    has_closed_crest = any(l.is_ring for l in crest_lines if hasattr(l, "is_ring"))
 
-    # Calculate boundary compactness (isoperimetric quotient: 4*pi*A / P^2)
+    # Boundary compactness (isoperimetric quotient)
     bnd_area = bnd_poly.area
     bnd_perim = bnd_line.length
     compactness = (4.0 * np.pi * bnd_area) / (bnd_perim ** 2) if bnd_perim > 0 else 0.0
@@ -415,29 +801,29 @@ def solve_stage_footprints(contours_gdf, elev_col, bnd_poly, bnd_line, method="a
     if method == "auto":
         if has_closed_crest:
             chosen = "ring"
-            reason = "standalone closed crest ring detected (closed basin / pit model)"
+            reason = "closed crest ring detected → closed basin / pit model"
         elif compactness < 0.1:
             chosen = "band"
-            reason = f"elongated corridor morphology (compactness={compactness:.4f} < 0.1, open bund model)"
+            reason = f"elongated corridor morphology (compactness={compactness:.4f} < 0.1) → open bund model"
         else:
             chosen = "split"
-            reason = f"compact concession block morphology (compactness={compactness:.4f} >= 0.1, boundary-cut model)"
+            reason = f"compact concession block (compactness={compactness:.4f} >= 0.1) → boundary-cut model"
     else:
         chosen = method
-        reason = f"explicitly requested by user (--method {method})"
+        reason = f"explicitly requested via --method {method}"
 
-    print(f"  Selected Solver: '{chosen.upper()}' ({reason})")
+    print(f"  Solver           : {chosen.upper()} ({reason})")
 
     if chosen == "ring":
         try:
             cumul_polys = _solve_ring_snap(contours_gdf, elev_col, bnd_line, unique_elevs, max_elev)
         except Exception as e:
-            print(f"  Ring solver encountered: {e}. Falling back to boundary-split.")
+            print(f"  Ring solver error: {e}  → falling back to SPLIT solver.")
             cumul_polys = _solve_boundary_split(contours_gdf, elev_col, bnd_poly, unique_elevs, max_elev)
     elif chosen == "band":
-        print(f"  Contour-band close distance: {close_dist:.1f} m")
+        print(f"  Close distance   : {close_dist:.1f} m")
         cumul_polys = _solve_corridor_band(contours_gdf, elev_col, bnd_poly, unique_elevs, close_dist=close_dist)
-    else:  # split
+    else:
         cumul_polys = _solve_boundary_split(contours_gdf, elev_col, bnd_poly, unique_elevs, max_elev)
 
     # Drop empty stages
@@ -445,20 +831,32 @@ def solve_stage_footprints(contours_gdf, elev_col, bnd_poly, bnd_line, method="a
                    if p is not None and not p.is_empty and p.area > 0}
 
     elevs_asc = sorted(cumul_polys.keys())
-    print("\n  Verified Watertight Stage Polygons:")
-    for el in elevs_asc:
+
+    # ── Stage table ──────────────────────────────────────────────────────────
+    print()
+    hdr = f"  {'Stage':>5}  {'Elevation (m)':>13}  {'Area (m²)':>14}  {'Area (ha)':>10}"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    for idx, el in enumerate(elevs_asc, start=1):
         pa = cumul_polys[el].area
-        print(f"    Stage {el:6.1f} m: Area = {pa:10.2f} m² ({pa / 10000.0:.3f} ha)")
+        print(f"  {idx:>5}  {el:>13.2f}  {pa:>14,.2f}  {pa / 10000.0:>10.4f}")
+    print()
 
     return elevs_asc, cumul_polys
 
 
+# ---------------------------------------------------------------------------
+# STAGE 3: VOLUMETRICS
+# ---------------------------------------------------------------------------
+
 def compute_volumetrics(elevs_asc, stage_polys, bnd_poly, crs_str):
     """
-    Stage 3: Calculate multi-layer prismoidal frustum and end-area volumes.
+    Calculate multi-layer prismoidal frustum and end-area volumes.
     """
-    print("\n" + "=" * 80)
+    sep = "=" * 80
+    print(sep)
     print("STAGE 3: VOLUMETRIC COMPUTATION (PRISMOIDAL FRUSTUM)")
+    print(sep)
 
     n_stages = len(elevs_asc)
     areas_m2 = [stage_polys[el].area for el in elevs_asc]
@@ -473,28 +871,34 @@ def compute_volumetrics(elevs_asc, stage_polys, bnd_poly, crs_str):
     base_area = areas_m2[0]
 
     stage_records.append({
-        'Stage_ID': 1,
-        'Elevation_m': base_elev,
-        'Stage_Depth_m': 0.0,
-        'Contour_Area_m2': round(base_area, 2),
-        'Contour_Area_ha': round(base_area / 10000.0, 4),
-        'Slice_Frustum_Vol_m3': 0.0,
-        'Slice_Frustum_Vol_CuFt': 0.0,
-        'Cumul_Frustum_Vol_m3': 0.0,
-        'Cumul_Frustum_Vol_1000m3': 0.0,
-        'Cumul_Frustum_Vol_AcreFeet': 0.0,
-        'Cumul_Frustum_Vol_CuFt': 0.0,
-        'Slice_EndArea_Vol_m3': 0.0,
-        'Slice_EndArea_Vol_CuFt': 0.0,
-        'Cumul_EndArea_Vol_m3': 0.0,
-        'Cumul_EndArea_Vol_CuFt': 0.0,
-        'Delta_Vol_m3': 0.0,
-        'Delta_Percent': 0.0
+        "Stage_ID": 1,
+        "Elevation_m": base_elev,
+        "Stage_Depth_m": 0.0,
+        "Contour_Area_m2": round(base_area, 2),
+        "Contour_Area_ha": round(base_area / 10000.0, 4),
+        "Slice_Frustum_Vol_m3": 0.0,
+        "Slice_Frustum_Vol_CuFt": 0.0,
+        "Cumul_Frustum_Vol_m3": 0.0,
+        "Cumul_Frustum_Vol_1000m3": 0.0,
+        "Cumul_Frustum_Vol_AcreFeet": 0.0,
+        "Cumul_Frustum_Vol_CuFt": 0.0,
+        "Slice_EndArea_Vol_m3": 0.0,
+        "Slice_EndArea_Vol_CuFt": 0.0,
+        "Cumul_EndArea_Vol_m3": 0.0,
+        "Cumul_EndArea_Vol_CuFt": 0.0,
+        "Delta_Vol_m3": 0.0,
+        "Delta_Percent": 0.0,
     })
 
-    print("-" * 115)
-    print(f"{'Layer':<6} | {'Z_Low (m)':<9} | {'Z_High (m)':<10} | {'dH (m)':<6} | {'Frustum (m³)':<13} | {'End-Area (m³)':<13} | {'Diff (m³)':<10} | {'Cumul Frustum (m³)':<18}")
-    print("-" * 115)
+    # ── Layer computation table ──────────────────────────────────────────────
+    col_w = [6, 10, 11, 7, 14, 14, 11, 19]
+    header = (
+        f"  {'Layer':<{col_w[0]}} {'Z_Low (m)':<{col_w[1]}} {'Z_High (m)':<{col_w[2]}} "
+        f"{'dH (m)':<{col_w[3]}} {'Frustum (m³)':<{col_w[4]}} {'End-Area (m³)':<{col_w[5]}} "
+        f"{'Diff (m³)':<{col_w[6]}} {'Cumul Frustum (m³)':<{col_w[7]}}"
+    )
+    print(header)
+    print("  " + "-" * (len(header) - 2))
 
     for k in range(n_stages - 1):
         z_low = elevs_asc[k]
@@ -513,163 +917,216 @@ def compute_volumetrics(elevs_asc, stage_polys, bnd_poly, crs_str):
         cumul_endarea_vol += v_endarea
 
         stage_depth = round(z_high - base_elev, 2)
-        print(f"L{k+1:<5} | {z_low:<9.1f} | {z_high:<10.1f} | {dh:<6.2f} | {v_frustum:<13,.2f} | {v_endarea:<13,.2f} | {diff_vol:<+10.2f} | {cumul_frustum_vol:<18,.2f}")
+
+        print(
+            f"  L{k+1:<{col_w[0]-1}} {z_low:<{col_w[1]}.2f} {z_high:<{col_w[2]}.2f} "
+            f"{dh:<{col_w[3]}.2f} {v_frustum:<{col_w[4]},.2f} {v_endarea:<{col_w[5]},.2f} "
+            f"{diff_vol:<+{col_w[6]}.2f} {cumul_frustum_vol:<{col_w[7]},.2f}"
+        )
 
         slice_geom = clean_polygon(stage_polys[z_low].difference(stage_polys[z_high]))
 
         layer_records.append({
-            'STAGE_ID': k + 1,
-            'Z_LOW': z_low,
-            'Z_HIGH': z_high,
-            'DELTA_H': dh,
-            'A_LOW_M2': round(a_low, 2),
-            'A_HIGH_M2': round(a_high, 2),
-            'VOL_M3': round(v_frustum, 2),
-            'VOL_CUFT': round(v_frustum * M3_TO_CUFT, 2),
-            'CUMUL_M3': round(cumul_frustum_vol, 2),
-            'CUM_CUFT': round(cumul_frustum_vol * M3_TO_CUFT, 2),
-            'geometry': slice_geom
+            "STAGE_ID": k + 1,
+            "Z_LOW": z_low,
+            "Z_HIGH": z_high,
+            "DELTA_H": dh,
+            "A_LOW_M2": round(a_low, 2),
+            "A_HIGH_M2": round(a_high, 2),
+            "VOL_M3": round(v_frustum, 2),
+            "VOL_CUFT": round(v_frustum * M3_TO_CUFT, 2),
+            "CUMUL_M3": round(cumul_frustum_vol, 2),
+            "CUM_CUFT": round(cumul_frustum_vol * M3_TO_CUFT, 2),
+            "geometry": slice_geom,
         })
 
         stage_records.append({
-            'Stage_ID': k + 2,
-            'Elevation_m': z_high,
-            'Stage_Depth_m': stage_depth,
-            'Contour_Area_m2': round(a_high, 2),
-            'Contour_Area_ha': round(a_high / 10000.0, 4),
-            'Slice_Frustum_Vol_m3': round(v_frustum, 2),
-            'Slice_Frustum_Vol_CuFt': round(v_frustum * M3_TO_CUFT, 2),
-            'Cumul_Frustum_Vol_m3': round(cumul_frustum_vol, 2),
-            'Cumul_Frustum_Vol_1000m3': round(cumul_frustum_vol / 1000.0, 3),
-            'Cumul_Frustum_Vol_AcreFeet': round(cumul_frustum_vol * M3_TO_ACRE_FEET, 3),
-            'Cumul_Frustum_Vol_CuFt': round(cumul_frustum_vol * M3_TO_CUFT, 2),
-            'Slice_EndArea_Vol_m3': round(v_endarea, 2),
-            'Slice_EndArea_Vol_CuFt': round(v_endarea * M3_TO_CUFT, 2),
-            'Cumul_EndArea_Vol_m3': round(cumul_endarea_vol, 2),
-            'Cumul_EndArea_Vol_CuFt': round(cumul_endarea_vol * M3_TO_CUFT, 2),
-            'Delta_Vol_m3': round(diff_vol, 2),
-            'Delta_Percent': round(diff_pct, 3)
+            "Stage_ID": k + 2,
+            "Elevation_m": z_high,
+            "Stage_Depth_m": stage_depth,
+            "Contour_Area_m2": round(a_high, 2),
+            "Contour_Area_ha": round(a_high / 10000.0, 4),
+            "Slice_Frustum_Vol_m3": round(v_frustum, 2),
+            "Slice_Frustum_Vol_CuFt": round(v_frustum * M3_TO_CUFT, 2),
+            "Cumul_Frustum_Vol_m3": round(cumul_frustum_vol, 2),
+            "Cumul_Frustum_Vol_1000m3": round(cumul_frustum_vol / 1000.0, 3),
+            "Cumul_Frustum_Vol_AcreFeet": round(cumul_frustum_vol * M3_TO_ACRE_FEET, 3),
+            "Cumul_Frustum_Vol_CuFt": round(cumul_frustum_vol * M3_TO_CUFT, 2),
+            "Slice_EndArea_Vol_m3": round(v_endarea, 2),
+            "Slice_EndArea_Vol_CuFt": round(v_endarea * M3_TO_CUFT, 2),
+            "Cumul_EndArea_Vol_m3": round(cumul_endarea_vol, 2),
+            "Cumul_EndArea_Vol_CuFt": round(cumul_endarea_vol * M3_TO_CUFT, 2),
+            "Delta_Vol_m3": round(diff_vol, 2),
+            "Delta_Percent": round(diff_pct, 3),
         })
 
     cumul_records = []
     for idx, el in enumerate(elevs_asc):
         cumul_records.append({
-            'STAGE_ID': idx + 1,
-            'ELEVATION': el,
-            'AREA_M2': round(stage_polys[el].area, 2),
-            'AREA_HA': round(stage_polys[el].area / 10000.0, 4),
-            'DEPTH_M': round(el - base_elev, 2),
-            'geometry': stage_polys[el]
+            "STAGE_ID": idx + 1,
+            "ELEVATION": el,
+            "AREA_M2": round(stage_polys[el].area, 2),
+            "AREA_HA": round(stage_polys[el].area / 10000.0, 4),
+            "DEPTH_M": round(el - base_elev, 2),
+            "geometry": stage_polys[el],
         })
 
     report_df = pd.DataFrame(stage_records)
     layers_gdf = gpd.GeoDataFrame(layer_records, crs=crs_str)
     cumul_gdf = gpd.GeoDataFrame(cumul_records, crs=crs_str)
 
-    print("-" * 115)
-    print(f"Total Frustum Volume:  {cumul_frustum_vol:15,.2f} m³ ({cumul_frustum_vol * M3_TO_CUFT:,.2f} cu ft / {cumul_frustum_vol * M3_TO_ACRE_FEET:,.2f} acre-ft)")
-    print(f"Total End-Area Volume: {cumul_endarea_vol:15,.2f} m³ ({cumul_endarea_vol * M3_TO_CUFT:,.2f} cu ft)")
-    print(f"Difference (End-Area - Frustum): {cumul_endarea_vol - cumul_frustum_vol:+10.2f} m³ ({(cumul_endarea_vol - cumul_frustum_vol)/cumul_frustum_vol*100.0:+.2f}%)")
+    # ── Volume totals ────────────────────────────────────────────────────────
+    print("  " + "-" * (len(header) - 2))
+    print(f"\n  Total Frustum Volume   : {cumul_frustum_vol:>15,.2f} m³")
+    print(f"                           {cumul_frustum_vol * M3_TO_CUFT:>15,.2f} cu ft")
+    print(f"                           {cumul_frustum_vol * M3_TO_ACRE_FEET:>15,.3f} acre-ft")
+    print(f"  Total End-Area Volume  : {cumul_endarea_vol:>15,.2f} m³")
+    diff_tot = cumul_endarea_vol - cumul_frustum_vol
+    diff_pct_tot = (diff_tot / cumul_frustum_vol * 100.0) if cumul_frustum_vol > 0 else 0.0
+    print(f"  Difference (EA - F)    : {diff_tot:>+15,.2f} m³  ({diff_pct_tot:+.3f}%)")
+    print()
 
-    return report_df, layers_gdf, cumul_gdf
+    return report_df, layers_gdf, cumul_gdf, cumul_frustum_vol, cumul_endarea_vol
 
+
+# ---------------------------------------------------------------------------
+# STAGE 4: EXPORT
+# ---------------------------------------------------------------------------
 
 def export_deliverables(output_dir, prefix, report_df, layers_gdf, cumul_gdf, bnd_poly):
     """
-    Stage 4: Write all 5 standard engineering deliverables.
+    Write all 5 standard engineering deliverables.
     """
-    print("\n" + "=" * 80)
+    sep = "=" * 80
+    print(sep)
     print("STAGE 4: EXPORTING DELIVERABLES")
+    print(sep)
     os.makedirs(output_dir, exist_ok=True)
 
     # 1. Frustum slice polygons shapefile
     slice_shp = os.path.join(output_dir, f"{prefix}_frustum_slice_polygons.shp")
     layers_gdf.to_file(slice_shp)
-    print(f"  [1/5] Slice Polygons Shapefile:       {slice_shp}")
+    print(f"  [1/5] Slice polygons shapefile       : {slice_shp}")
 
     # 2. Cumulative stage footprints shapefile
     cumul_shp = os.path.join(output_dir, f"{prefix}_frustum_cumulative_polygons.shp")
     cumul_gdf.to_file(cumul_shp)
-    print(f"  [2/5] Cumulative Polygons Shapefile:  {cumul_shp}")
+    print(f"  [2/5] Cumulative polygons shapefile  : {cumul_shp}")
 
     # 3. CSV Report
     report_csv = os.path.join(output_dir, f"{prefix}_frustum_volumetric_report.csv")
     report_df.to_csv(report_csv, index=False)
-    print(f"  [3/5] Volumetric Schedule CSV:        {report_csv}")
+    print(f"  [3/5] Volumetric schedule CSV        : {report_csv}")
 
     # 4. Stage-Storage Curves Plot
     curves_png = os.path.join(output_dir, f"{prefix}_stage_storage_curves.png")
     fig, ax1 = plt.subplots(figsize=(10, 6), dpi=300)
-    elevations = report_df['Elevation_m']
-    areas = report_df['Contour_Area_m2']
-    vols = report_df['Cumul_Frustum_Vol_m3']
+    elevations = report_df["Elevation_m"]
+    areas = report_df["Contour_Area_m2"]
+    vols = report_df["Cumul_Frustum_Vol_m3"]
 
-    color1 = '#1f77b4'
-    ax1.set_xlabel('Contour Elevation (m)', fontweight='bold')
-    ax1.set_ylabel('Stage Footprint Area (m²)', color=color1, fontweight='bold')
-    line1 = ax1.plot(elevations, areas, color=color1, marker='o', markersize=3, label='Stage Area (m²)', linewidth=2)
-    ax1.tick_params(axis='y', labelcolor=color1)
-    ax1.grid(True, linestyle='--', alpha=0.5)
+    color1 = "#1f77b4"
+    ax1.set_xlabel("Contour Elevation (m)", fontweight="bold")
+    ax1.set_ylabel("Stage Footprint Area (m²)", color=color1, fontweight="bold")
+    line1 = ax1.plot(elevations, areas, color=color1, marker="o", markersize=3, label="Stage Area (m²)", linewidth=2)
+    ax1.tick_params(axis="y", labelcolor=color1)
+    ax1.grid(True, linestyle="--", alpha=0.5)
 
     ax2 = ax1.twinx()
-    color2 = '#d62728'
-    ax2.set_ylabel('Cumulative Frustum Volume (m³)', color=color2, fontweight='bold')
-    line2 = ax2.plot(elevations, vols, color=color2, marker='s', markersize=3, label='Cumul. Volume (m³)', linewidth=2)
-    ax2.tick_params(axis='y', labelcolor=color2)
+    color2 = "#d62728"
+    ax2.set_ylabel("Cumulative Frustum Volume (m³)", color=color2, fontweight="bold")
+    line2 = ax2.plot(elevations, vols, color=color2, marker="s", markersize=3, label="Cumul. Volume (m³)", linewidth=2)
+    ax2.tick_params(axis="y", labelcolor=color2)
 
     lines = line1 + line2
     labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='center left', framealpha=0.9)
-    plt.title(f'Stage-Area & Stage-Storage Curves — {prefix.upper()}', fontweight='bold', pad=12)
+    ax1.legend(lines, labels, loc="center left", framealpha=0.9)
+    plt.title(f"Stage-Area & Stage-Storage Curves — {prefix.upper()}", fontweight="bold", pad=12)
     fig.tight_layout()
     plt.savefig(curves_png)
     plt.close()
-    print(f"  [4/5] Stage-Storage Curves Plot:      {curves_png}")
+    print(f"  [4/5] Stage-storage curves plot      : {curves_png}")
 
     # 5. Planimetric 2D Slices Map
     map_png = os.path.join(output_dir, f"{prefix}_contour_slices_map.png")
     fig, ax = plt.subplots(figsize=(10, 8), dpi=300)
-    norm = Normalize(vmin=cumul_gdf['ELEVATION'].min(), vmax=cumul_gdf['ELEVATION'].max())
+    norm = Normalize(vmin=cumul_gdf["ELEVATION"].min(), vmax=cumul_gdf["ELEVATION"].max())
     cmap = cm.viridis
 
-    for _, row in cumul_gdf.sort_values('ELEVATION', ascending=True).iterrows():
-        color = cmap(norm(row['ELEVATION']))
+    for _, row in cumul_gdf.sort_values("ELEVATION", ascending=True).iterrows():
+        color = cmap(norm(row["ELEVATION"]))
         g = row.geometry
-        if g.geom_type == 'Polygon':
+        if g.geom_type == "Polygon":
             ax.plot(*g.exterior.xy, color=color, linewidth=1.2)
-        elif g.geom_type == 'MultiPolygon':
+        elif g.geom_type == "MultiPolygon":
             for p in g.geoms:
                 ax.plot(*p.exterior.xy, color=color, linewidth=1.2)
 
-    if bnd_poly.geom_type == 'Polygon':
-        ax.plot(*bnd_poly.exterior.xy, color='black', linewidth=2.0, linestyle='--', label='Boundary')
-    elif bnd_poly.geom_type == 'MultiPolygon':
+    if bnd_poly.geom_type == "Polygon":
+        ax.plot(*bnd_poly.exterior.xy, color="black", linewidth=2.0, linestyle="--", label="Boundary")
+    elif bnd_poly.geom_type == "MultiPolygon":
         for p in bnd_poly.geoms:
-            ax.plot(*p.exterior.xy, color='black', linewidth=2.0, linestyle='--', label='Boundary')
+            ax.plot(*p.exterior.xy, color="black", linewidth=2.0, linestyle="--", label="Boundary")
 
     sm = cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label('Contour Elevation (m)', fontweight='bold')
+    cbar.set_label("Contour Elevation (m)", fontweight="bold")
 
-    ax.set_aspect('equal', 'box')
-    ax.set_title(f'Watertight Contour Stage Footprints — {prefix.upper()}', fontweight='bold', pad=12)
-    ax.set_xlabel('UTM Easting (m)', fontweight='bold')
-    ax.set_ylabel('UTM Northing (m)', fontweight='bold')
-    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.set_aspect("equal", "box")
+    ax.set_title(f"Watertight Contour Stage Footprints — {prefix.upper()}", fontweight="bold", pad=12)
+    ax.set_xlabel("UTM Easting (m)", fontweight="bold")
+    ax.set_ylabel("UTM Northing (m)", fontweight="bold")
+    ax.grid(True, linestyle=":", alpha=0.6)
     fig.tight_layout()
     plt.savefig(map_png)
     plt.close()
-    print(f"  [5/5] Planimetric Contour Slices Map: {map_png}")
+    print(f"  [5/5] Planimetric contour slices map : {map_png}")
+    print()
 
-    print("=" * 80)
-    print("ANALYSIS COMPLETE — ALL DELIVERABLES GENERATED SUCCESSFULLY.")
 
+# ---------------------------------------------------------------------------
+# SUMMARY BLOCK
+# ---------------------------------------------------------------------------
+
+def print_summary(input_path, output_dir, prefix, elev_col,
+                  cumul_frustum_vol, cumul_endarea_vol, n_stages,
+                  elev_min, elev_max, bnd_area_m2):
+    """Print a structured SUMMARY block for easy parsing / downstream ingestion."""
+    sep = "=" * 80
+    print(sep)
+    print("SUMMARY")
+    print(sep)
+    print(f"  input_file              : {input_path}")
+    print(f"  elevation_column        : {elev_col}")
+    print(f"  output_directory        : {output_dir}")
+    print(f"  output_prefix           : {prefix}")
+    print(f"  contour_stages          : {n_stages}")
+    print(f"  elevation_min_m         : {elev_min:.2f}")
+    print(f"  elevation_max_m         : {elev_max:.2f}")
+    print(f"  boundary_area_m2        : {bnd_area_m2:,.2f}")
+    print(f"  boundary_area_ha        : {bnd_area_m2 / 10000.0:.4f}")
+    print(f"  total_frustum_vol_m3    : {cumul_frustum_vol:,.2f}")
+    print(f"  total_frustum_vol_cuft  : {cumul_frustum_vol * M3_TO_CUFT:,.2f}")
+    print(f"  total_frustum_vol_acft  : {cumul_frustum_vol * M3_TO_ACRE_FEET:.3f}")
+    print(f"  total_endarea_vol_m3    : {cumul_endarea_vol:,.2f}")
+    diff = cumul_endarea_vol - cumul_frustum_vol
+    diff_pct = (diff / cumul_frustum_vol * 100.0) if cumul_frustum_vol > 0 else 0.0
+    print(f"  method_diff_m3          : {diff:+,.2f}")
+    print(f"  method_diff_percent     : {diff_pct:+.3f}")
+    print(sep)
+    print("STATUS: SUCCESS — all deliverables generated.")
+    print(sep)
+
+
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
 
 def main():
     args = parse_args()
     input_path = os.path.abspath(args.input)
-    
+
     input_stem = os.path.splitext(os.path.basename(input_path))[0]
     prefix = args.prefix.strip().lower() if args.prefix else input_stem.lower()
 
@@ -677,18 +1134,27 @@ def main():
         output_dir = os.path.abspath(args.output_dir)
     else:
         parent_dir = os.path.dirname(input_path)
+        site_name = os.path.basename(parent_dir)
         grandparent_dir = os.path.dirname(parent_dir)
-        if os.path.basename(parent_dir).lower() == "input":
-            output_dir = os.path.join(grandparent_dir, "output")
+        grandparent_name = os.path.basename(grandparent_dir).lower()
+        if grandparent_name in ("inputs", "input"):
+            project_root = os.path.dirname(grandparent_dir)
+            output_dir = os.path.join(project_root, "outputs", site_name)
+        elif site_name.lower() in ("input", "inputs"):
+            output_dir = os.path.join(grandparent_dir, "outputs")
         else:
-            output_dir = os.path.join(parent_dir, "output")
+            output_dir = os.path.join(parent_dir, "outputs", site_name)
 
-    # Pipeline execution
+    # ── Pipeline ─────────────────────────────────────────────────────────────
     gdf, contours_gdf, elev_col, bnd_poly, bnd_line, crs_str = analyze_and_load(
         input_path=input_path,
         boundary_path=args.boundary,
         elev_col_override=args.elev_col,
-        target_epsg_override=args.target_epsg
+        geom_col_override=args.geom_col,
+        bnd_col_override=args.bnd_col,
+        bnd_val_override=args.bnd_val,
+        col_map_override=args.col_map,
+        target_epsg_override=args.target_epsg,
     )
 
     elevs_asc, stage_polys = solve_stage_footprints(
@@ -698,14 +1164,14 @@ def main():
         bnd_line=bnd_line,
         method=args.method,
         close_dist=args.close_dist,
-        snap_tol=args.snap_tol
+        snap_tol=args.snap_tol,
     )
 
-    report_df, layers_gdf, cumul_gdf = compute_volumetrics(
+    report_df, layers_gdf, cumul_gdf, cumul_frustum_vol, cumul_endarea_vol = compute_volumetrics(
         elevs_asc=elevs_asc,
         stage_polys=stage_polys,
         bnd_poly=bnd_poly,
-        crs_str=crs_str
+        crs_str=crs_str,
     )
 
     export_deliverables(
@@ -714,7 +1180,20 @@ def main():
         report_df=report_df,
         layers_gdf=layers_gdf,
         cumul_gdf=cumul_gdf,
-        bnd_poly=bnd_poly
+        bnd_poly=bnd_poly,
+    )
+
+    print_summary(
+        input_path=input_path,
+        output_dir=output_dir,
+        prefix=prefix,
+        elev_col=elev_col,
+        cumul_frustum_vol=cumul_frustum_vol,
+        cumul_endarea_vol=cumul_endarea_vol,
+        n_stages=len(elevs_asc),
+        elev_min=elevs_asc[0],
+        elev_max=elevs_asc[-1],
+        bnd_area_m2=bnd_poly.area,
     )
 
 
