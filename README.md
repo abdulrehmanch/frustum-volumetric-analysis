@@ -1,18 +1,21 @@
 # Frustum Volumetric Analysis & 3D WebGIS Inspection Engine
 
 [![CI](https://github.com/abdulrehmanch/frustum-volumetric-analysis/actions/workflows/ci.yml/badge.svg)](https://github.com/abdulrehmanch/frustum-volumetric-analysis/actions)
+[![Live 3D Demo](https://img.shields.io/badge/Live%20Demo-volumetric.geoforger.com-0066cc?style=flat&logo=cesium)](https://volumetric.geoforger.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 A high-precision, dataset-agnostic computational geospatial pipeline for multi-layer **Prismoidal Frustum** earthwork volumetric calculations, automated stage-storage curve generation, and interactive **3D CesiumJS WebGIS** digital twin visualizers.
 
+🌐 **Live Interactive 3D WebGIS Demo:** [volumetric.geoforger.com](https://volumetric.geoforger.com)
+
 ---
 
 ## 📸 Visualizations & 3D Digital Twin (South Heap Benchmark)
 
-### Interactive 3D CesiumJS WebGIS Viewer
-![3D CesiumJS WebGIS Viewer](assets/viewer_3d_south_heap.png)
+### Interactive 3D CesiumJS WebGIS Viewer ([Launch Live 3D App](https://volumetric.geoforger.com))
+[![3D CesiumJS WebGIS Viewer](assets/viewer_3d_south_heap.png)](https://volumetric.geoforger.com)
 
 | 2D Planimetric Slices Map | Dual-Axis Stage-Storage Curves |
 | :---: | :---: |

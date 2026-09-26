@@ -68,3 +68,12 @@ htmlcov/
 *.log
 *.tmp
 *.bak
+
+# ----------------------------------------------------------------------------
+# Cloudflare / Wrangler deployment
+# ----------------------------------------------------------------------------
+.wrangler/
+wrangler.jsonc
+wrangler.toml
+public/
+src/
