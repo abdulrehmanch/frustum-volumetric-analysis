@@ -9,7 +9,10 @@ A high-precision, dataset-agnostic computational geospatial pipeline for multi-l
 
 ---
 
-## 📸 Visualizations (South Basin Benchmark)
+## 📸 Visualizations & 3D Digital Twin (South Heap Benchmark)
+
+### Interactive 3D CesiumJS WebGIS Viewer
+![3D CesiumJS WebGIS Viewer](assets/viewer_3d_south_heap.png)
 
 | 2D Planimetric Slices Map | Dual-Axis Stage-Storage Curves |
 | :---: | :---: |
@@ -49,7 +52,7 @@ For every slice stage and cumulative depth, the engine calculates:
 ## ✨ Key Features
 
 1. **Universal Topological Engine (3 Solver Modes):**
-   * **`ring` Mode:** Topological ring-snap for closed internal contour rings (e.g. natural depressions, retention basins).
+   * **`ring` Mode:** Topological ring-snap for closed internal contour rings (e.g. natural depressions, heap stockpiles, retention basins).
    * **`split` Mode:** Boundary-cut planar polygon partitioning for bounded mining concessions.
    * **`band` Mode:** Morphological corridor dilation/erosion for open, unbounded survey lines.
 2. **Strict Downward Geometric Nesting:**
@@ -83,22 +86,22 @@ pip install -e .
 ### 2. Calculate Volumes on Sample Dataset
 
 ```bash
-# Run volumetric calculation on the included South pit sample
-python scripts/calculate_frustum_volume.py --input examples/sample_pit_south/Contours.shp
+# Run volumetric calculation on the included South heap sample
+python scripts/calculate_frustum_volume.py --input examples/sample_heap_south/Contours.shp
 ```
 
 ### 3. Generate 3D CesiumJS Viewer
 
 ```bash
 # Export Cesium-ready GeoJSON and launch interactive 3D WebGIS viewer
-python scripts/export_viewer_data.py --input examples/sample_pit_south/Contours.shp
+python scripts/export_viewer_data.py --input examples/sample_heap_south/Contours.shp
 ```
 
-Open `outputs/sample_pit_south/sample_pit_south_3d_viewer.html` directly in any modern web browser.
+Open `outputs/sample_heap_south/contours_3d_viewer.html` directly in any modern web browser.
 
 ---
 
-## 📊 Benchmark Verification (South Basin Sample)
+## 📊 Benchmark Verification (South Heap Sample)
 
 | Metric | Measured Quantity | Unit Equivalent |
 | :--- | :--- | :--- |
@@ -134,13 +137,16 @@ python scripts/calculate_frustum_volume.py [OPTIONS] --input PATH_TO_SHAPEFILE
 
 ```
 frustum-volumetric-analysis/
-├── assets/                          # Tracked figures and plots for documentation
+├── assets/                          # Tracked figures, 3D screenshots & curves
+│   ├── viewer_3d_south_heap.png     # Interactive 3D CesiumJS WebGIS screenshot
+│   ├── south_contour_slices_map.png # 2D planimetric slice map
+│   └── south_stage_storage_curves.png # Dual-axis stage-storage curve plot
 ├── docs/                            # Deep-dive engineering guides
 │   ├── METHODOLOGY_TECHNICAL.md     # Mathematical & computational formulation
 │   ├── METHODOLOGY_SIMPLE.md        # Plain-language methodology guide
 │   └── EXPORT_VIEWER_GUIDE.md       # CesiumJS 3D viewer export architecture
 ├── examples/                        # Sample survey datasets
-│   └── sample_pit_south/            # Concentric depression survey shapefile
+│   └── sample_heap_south/           # Concentric heap/depression survey shapefile
 ├── reference_sketches/              # Field diagrams & topological sketches
 ├── scripts/                         # Core execution engines
 │   ├── calculate_frustum_volume.py  # Volumetric calculation & shapefile generator

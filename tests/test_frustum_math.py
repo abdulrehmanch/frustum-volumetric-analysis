@@ -126,9 +126,9 @@ class TestPipelineExecution(unittest.TestCase):
     """End-to-end integration test using the sample dataset."""
 
     def test_sample_south_calculation_pipeline(self):
-        sample_shp = Path("examples/sample_pit_south/Contours.shp")
+        sample_shp = Path("examples/sample_heap_south/Contours.shp")
         if not sample_shp.exists():
-            self.skipTest("Sample shapefile not present in examples/sample_pit_south/")
+            self.skipTest("Sample shapefile not present in examples/sample_heap_south/")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cmd = [

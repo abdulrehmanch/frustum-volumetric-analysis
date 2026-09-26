@@ -22,6 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Analytical validation against geometric truncated cone and pyramid benchmarks.
   - AM-GM inequality divergence proofs and monotonic containment constraints.
 - **Open Source Infrastructure**:
-  - Sample dataset (`examples/sample_pit_south/`).
+  - Sample dataset (`examples/sample_heap_south/`).
   - GitHub Actions CI matrix testing across Python 3.10, 3.11, and 3.12.
   - MIT License with Engineering and Surveying Liability Disclaimer.
