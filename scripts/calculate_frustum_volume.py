@@ -115,7 +115,8 @@ Standard Required Input Columns & Mapping Flags
         help="Target output directory. Defaults to outputs/<site_name>/."
     )
     parser.add_argument(
-        "--prefix", "-p",
+        "--prefix", "--site-name", "-p", "-s",
+        dest="prefix",
         default=None,
         help="Prefix for output filenames. Defaults to shapefile stem in lowercase."
     )

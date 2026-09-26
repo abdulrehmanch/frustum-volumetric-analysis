@@ -136,7 +136,7 @@ class TestPipelineExecution(unittest.TestCase):
                 "scripts/calculate_frustum_volume.py",
                 "--input", str(sample_shp),
                 "--output-dir", tmpdir,
-                "--site-name", "test_south",
+                "--prefix", "test_south",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0 and "No module named 'geopandas'" in result.stderr:
