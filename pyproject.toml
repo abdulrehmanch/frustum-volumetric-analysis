@@ -1,14 +1,66 @@
 [project]
-name = "clip-contour-north"
-version = "0.1.0"
-description = "Prismoidal Frustum Volumetric Analysis"
-readme = "docs/PROJECT_OVERVIEW.md"
-requires-python = ">=3.12"
-dependencies = [
-    "geopandas>=1.1.4",
-    "matplotlib>=3.11.2",
-    "plotly>=7.1.0",
-    "pyproj>=3.8.0",
-    "scipy>=1.18.1",
-    "shapely>=2.1.2",
+name = "frustum-volumetric-analysis"
+version = "1.0.0"
+description = "High-precision computational geospatial pipeline for multi-layer prismoidal frustum volumetric calculations, stage-storage curves, and 3D CesiumJS WebGIS visualizers."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Abdul Rehman", email = "abdulrehman.ch@live.com" }
 ]
+keywords = [
+    "gis",
+    "geospatial",
+    "volumetric-analysis",
+    "earthwork",
+    "frustum",
+    "cesiumjs",
+    "geopandas",
+    "shapely",
+    "contours",
+    "stage-storage",
+    "civil-engineering",
+    "mining",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Other Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "geopandas>=1.0.0",
+    "matplotlib>=3.8.0",
+    "plotly>=5.20.0",
+    "pyproj>=3.6.0",
+    "scipy>=1.12.0",
+    "shapely>=2.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/abdulrehmanch/frustum-volumetric-analysis"
+Repository = "https://github.com/abdulrehmanch/frustum-volumetric-analysis"
+Issues = "https://github.com/abdulrehmanch/frustum-volumetric-analysis/issues"
+Documentation = "https://github.com/abdulrehmanch/frustum-volumetric-analysis/tree/main/docs"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]

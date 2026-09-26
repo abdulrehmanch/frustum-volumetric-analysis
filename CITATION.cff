@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use this software in research, surveying calculations, or academic publications, please cite it as below."
+title: "Frustum Volumetric Analysis: Computational Geospatial Pipeline for Multi-Layer Earthwork & 3D WebGIS Inspection"
+authors:
+  - family-names: Rehman
+    given-names: Abdul
+    email: abdulrehman.ch@live.com
+version: 1.0.0
+date-released: 2026-09-26
+license: MIT
+repository-code: "https://github.com/abdulrehmanch/frustum-volumetric-analysis"
+keywords:
+  - "geospatial"
+  - "volumetric analysis"
+  - "prismoidal frustum"
+  - "earthwork calculation"
+  - "cesiumjs"
+  - "gis"
+  - "stage-storage curve"
