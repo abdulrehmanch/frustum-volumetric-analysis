@@ -143,7 +143,6 @@ frustum-volumetric-analysis/
 │   └── south_stage_storage_curves.png # Dual-axis stage-storage curve plot
 ├── docs/                            # Deep-dive engineering guides
 │   ├── METHODOLOGY_TECHNICAL.md     # Mathematical & computational formulation
-│   ├── METHODOLOGY_SIMPLE.md        # Plain-language methodology guide
 │   └── EXPORT_VIEWER_GUIDE.md       # CesiumJS 3D viewer export architecture
 ├── examples/                        # Sample survey datasets
 │   └── sample_heap_south/           # Concentric heap/depression survey shapefile

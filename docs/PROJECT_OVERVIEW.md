@@ -154,7 +154,6 @@ Engineered a dataset-agnostic Python pipeline using GeoPandas, Shapely, and NumP
 - [x] High-resolution Stage-Storage & Stage-Area curve charts (`<region>_stage_storage_curves.png`)
 - [x] Planimetric slice maps (`<region>_contour_slices_map.png`)
 - [x] Standalone 3D CesiumJS interactive viewers (`north_3d_cesium_viewer.html`, `south_3d_cesium_viewer.html`)
-- [x] Plain-language methodology guide (`METHODOLOGY_SIMPLE.md`)
 - [x] Rigorous civil engineering technical methodology specification (`METHODOLOGY_TECHNICAL.md`)
 
 ### 6.2 Key Milestones
