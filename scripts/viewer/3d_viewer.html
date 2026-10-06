@@ -249,11 +249,11 @@
   <div style="margin-bottom:12px">
     <div class="ctrl-label" style="margin-bottom:5px">Color Scale</div>
     <select id="schemeSelect" onchange="setScheme(this.value)">
-      <option value="bathymetric" selected>Bathymetric (Blue Depth)</option>
+      <option value="bathymetric">Bathymetric (Blue Depth)</option>
       <option value="magma">Magma</option>
       <option value="viridis">Viridis</option>
       <option value="plasma">Plasma</option>
-      <option value="rainbow">Rainbow</option>
+      <option value="rainbow" selected>Rainbow</option>
     </select>
   </div>
 
@@ -288,8 +288,8 @@
   <!-- Contours toggle -->
   <div style="margin-bottom:12px">
     <div class="toggle-row">
-      <button class="toggle-btn active" id="btnContours" onclick="toggleContours()">
-        Contour Lines On
+      <button class="toggle-btn" id="btnContours" onclick="toggleContours()">
+        Contour Lines Off
       </button>
     </div>
   </div>
@@ -312,6 +312,7 @@
 <div id="statsCard" class="panel">
   <div id="statsSite">Loading…</div>
   <div class="stat-row"><span class="stat-key">Total Volume</span><span class="stat-val" id="sVol">—</span></div>
+  <div class="stat-row"><span class="stat-key">Cubic Feet</span>  <span class="stat-val" id="sCuft">—</span></div>
   <div class="stat-row"><span class="stat-key">Acre-Feet</span>   <span class="stat-val" id="sAcft">—</span></div>
   <div class="stat-row"><span class="stat-key">Layers</span>      <span class="stat-val" id="sLayers">—</span></div>
   <div class="stat-row"><span class="stat-key">Crest Elev.</span><span class="stat-val" id="sCrest">—</span></div>
@@ -332,7 +333,9 @@
   <div class="info-row"><span class="info-key">Depth</span>       <span class="info-val" id="iDepth">—</span></div>
   <div class="info-row"><span class="info-key">Area</span>        <span class="info-val" id="iArea">—</span></div>
   <div class="info-row"><span class="info-key">Slice Vol.</span>  <span class="info-val" id="iVol">—</span></div>
+  <div class="info-row"><span class="info-key">Slice Cu.Ft.</span><span class="info-val" id="iSliceCuft">—</span></div>
   <div class="info-row"><span class="info-key">Cum. Vol.</span>   <span class="info-val" id="iCumVol">—</span></div>
+  <div class="info-row"><span class="info-key">Cum. Cu.Ft.</span> <span class="info-val" id="iCumCuft">—</span></div>
   <div class="info-row"><span class="info-key">Cum. Acre-ft</span><span class="info-val" id="iAcft">—</span></div>
 </div>
 
@@ -385,11 +388,11 @@ const APP = {
   basemap:       'satellite', // 'satellite', 'osm', 'dark'
   groundMode:    'ground',    // 'ground' (0m datum, clamped to ground) or 'absolute' (MSL)
   mode:          'hollow',
-  scheme:        'bathymetric',
+  scheme:        'rainbow',
   vExag:         1.0,
   fillEnabled:   false,
   fillFraction:  0.0,    // 0–1 of total depth
-  showContours:  true,
+  showContours:  false,
   fillEntity:    null,
 };
 
@@ -771,13 +774,17 @@ function fmt(n, d=0) { return Number(n).toLocaleString(undefined, {maximumFracti
 
 function showSliceInfo(p) {
   if (!p) { infoCard.style.display = 'none'; return; }
+  const volCuft = p.vol_cuft !== undefined ? p.vol_cuft : (p.vol_m3 * 35.3146667);
+  const cumCuft = p.cum_cuft !== undefined ? p.cum_cuft : (p.cum_m3 * 35.3146667);
   document.getElementById('infoTitle').textContent = p.label;
-  document.getElementById('iElev')   .textContent = `${p.z_low.toFixed(1)} m – ${p.z_high.toFixed(1)} m`;
-  document.getElementById('iDepth')  .textContent = `${p.depth_mean_m.toFixed(2)} m`;
-  document.getElementById('iArea')   .textContent = `${fmt(p.area_ha,3)} ha  (${fmt(p.area_m2,0)} m²)`;
-  document.getElementById('iVol')    .textContent = `${fmt(p.vol_m3,0)} m³`;
-  document.getElementById('iCumVol') .textContent = `${fmt(p.cum_m3,0)} m³`;
-  document.getElementById('iAcft')   .textContent = `${fmt(p.cum_acft,2)} ac·ft`;
+  document.getElementById('iElev')     .textContent = `${p.z_low.toFixed(1)} m – ${p.z_high.toFixed(1)} m`;
+  document.getElementById('iDepth')    .textContent = `${p.depth_mean_m.toFixed(2)} m`;
+  document.getElementById('iArea')     .textContent = `${fmt(p.area_ha,3)} ha  (${fmt(p.area_m2,0)} m²)`;
+  document.getElementById('iVol')      .textContent = `${fmt(p.vol_m3,0)} m³`;
+  document.getElementById('iSliceCuft').textContent = `${fmt(volCuft,0)} cu ft`;
+  document.getElementById('iCumVol')   .textContent = `${fmt(p.cum_m3,0)} m³`;
+  document.getElementById('iCumCuft')  .textContent = `${fmt(cumCuft,0)} cu ft`;
+  document.getElementById('iAcft')     .textContent = `${fmt(p.cum_acft,2)} ac·ft`;
   infoCard.style.display = 'block';
 }
 
@@ -801,8 +808,10 @@ handler.setInputAction(clk => {
 // 10. Stats Card
 // ─────────────────────────────────────────────────────────────────────────────
 function populateStats(S) {
+  const totCuft = S.total_vol_cuft !== undefined ? S.total_vol_cuft : (S.total_vol_m3 * 35.3146667);
   document.getElementById('statsSite') .textContent = `📍 ${S.site_name.toUpperCase()}`;
   document.getElementById('sVol')      .textContent = `${fmt(S.total_vol_m3,0)} m³`;
+  document.getElementById('sCuft')     .textContent = `${fmt(totCuft,0)} cu ft`;
   document.getElementById('sAcft')     .textContent = `${fmt(S.total_vol_acft,2)} ac·ft`;
   document.getElementById('sLayers')  .textContent = S.num_slices;
   document.getElementById('sCrest')   .textContent = `${S.crest_elev.toFixed(2)} m`;
