@@ -1,0 +1,17 @@
+services:
+  portal:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mmd_portal
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Live-mount outputs: any new site or deliverable added here appears immediately
+      - ./outputs:/app/outputs
+      - ./inputs:/app/inputs:ro
+      - ./scripts:/app/scripts:ro
+      - ./auth.db:/app/auth.db
+    environment:
+      - PORT=8080

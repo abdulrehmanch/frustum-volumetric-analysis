@@ -13,25 +13,29 @@ All work in this repository must strictly adhere to the following directory layo
 
 ---
 
-## 2. Volumetric Calculation & 3D Viewer Commands
+## 2. Volumetric Calculation, 3D Viewer & Deployment Commands
 
 **Step 1 — Calculate Volumes:**
 ```bash
-uv run python scripts/calculate_frustum_volume.py --input inputs/<site_name>/<shapefile>.shp
+uv run python scripts/calculate_frustum_volume.py --input inputs/<assignment>/<unit>/<shapefile>.shp
 ```
 
 **Step 2 — Export 3D Viewer Data & Deploy HTML:**
 ```bash
-uv run python scripts/export_viewer_data.py --input inputs/<site_name>/<shapefile>.shp
+uv run python scripts/export_viewer_data.py --input inputs/<assignment>/<unit>/<shapefile>.shp --output-dir outputs/<assignment>/<unit>
 ```
 
-*Both scripts automatically derive `--output-dir outputs/<site_name>/` and `<site_name>_` prefixing from the input path.*
+**Step 3 — Deploy / Sync to Remote Server (Zero Restart):**
+```bash
+rsync -avz outputs/<assignment>/ devserver:~/mmd_frustum_portal/outputs/<assignment>/
+```
 
 ---
 
 ## 3. Skill Reference
-- **Volumetric Engine & Mathematics:** Refer to `.agents/skills/contour-frustum-volume/SKILL.md`.
-- **3D CesiumJS WebGIS Viewer:** Refer to `.agents/skills/cesium-3d-volumetric-viewer/SKILL.md`.
+- **1. Volumetric Engine & Mathematics:** Refer to `.agents/skills/fr-calculate-volume/SKILL.md`.
+- **2. 3D CesiumJS WebGIS Viewer & Local Serving:** Refer to `.agents/skills/fr-generate-3d-viewer/SKILL.md`.
+- **3. Remote Server Deployment & Sync:** Refer to `.agents/skills/fr-deploy/SKILL.md`.
 
 ---
 

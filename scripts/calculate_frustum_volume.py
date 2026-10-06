@@ -607,29 +607,43 @@ def analyze_and_load(input_path, boundary_path=None, elev_col_override=None, geo
         else:
             bnd_rows = gdf[gdf[elev_col] == 0.0]
 
-        if len(bnd_rows) > 0 and len(bnd_rows) <= 4:
-            geom = bnd_rows.geometry.iloc[0]
-            if geom.geom_type in ("Polygon", "MultiPolygon"):
-                bnd_poly = clean_polygon(geom)
-                bnd_line = bnd_poly.boundary
-            elif geom.geom_type == "LineString":
-                bnd_line = geom
-                bnd_poly = Polygon(geom.coords) if geom.is_closed else Polygon()
-            elif geom.geom_type == "MultiLineString":
-                bnd_line = unary_union(list(geom.geoms))
-                closed = [l for l in geom.geoms if l.is_closed]
-                bnd_poly = Polygon(closed[0].coords) if closed else Polygon()
+        if len(bnd_rows) > 0:
+            # 1. Try merging boundary geometries to form a closed polygon
+            try:
+                bnd_union = unary_union(bnd_rows.geometry)
+                bnd_merged = linemerge(bnd_union)
+                polys = list(polygonize(bnd_merged))
+                if polys:
+                    bnd_poly = clean_polygon(polys[0])
+                    bnd_line = bnd_poly.boundary
+            except Exception:
+                pass
+
+            # 2. If not polygonized yet, inspect geometry types directly
+            if bnd_poly is None or bnd_poly.is_empty or bnd_poly.area == 0:
+                geom = bnd_rows.geometry.iloc[0]
+                if geom.geom_type in ("Polygon", "MultiPolygon"):
+                    bnd_poly = clean_polygon(geom)
+                    bnd_line = bnd_poly.boundary
+                elif geom.geom_type == "LineString":
+                    bnd_line = geom
+                    bnd_poly = Polygon(geom.coords) if geom.is_closed else Polygon()
+                elif geom.geom_type == "MultiLineString":
+                    bnd_line = unary_union(list(geom.geoms))
+                    closed = [l for l in geom.geoms if l.is_closed]
+                    bnd_poly = Polygon(closed[0].coords) if closed else Polygon()
 
             if bnd_poly is not None and bnd_poly.is_valid and bnd_poly.area > 0:
                 print(f"  Boundary source  : auto-detected embedded boundary feature ({bnd_col or elev_col} == {bnd_val if bnd_col else '0.0'})")
 
-    if bnd_poly is not None and bnd_poly.area > 0:
-        if bnd_col and bnd_val is not None:
-            contours_gdf = gdf[gdf[bnd_col].astype(str) != str(bnd_val)].copy()
-        else:
-            contours_gdf = gdf[gdf[elev_col] > 0.0].copy()
+    if bnd_col and bnd_val is not None:
+        contours_gdf = gdf[gdf[bnd_col].astype(str) != str(bnd_val)].copy()
+    elif len(bnd_rows) > 0:
+        contours_gdf = gdf[gdf[elev_col] > 0.0].copy()
     else:
         contours_gdf = gdf.copy()
+
+    if bnd_poly is None or bnd_poly.is_empty or bnd_poly.area == 0:
         u_lines = unary_union(contours_gdf.geometry)
         bnd_poly = clean_polygon(u_lines.convex_hull)
         bnd_line = bnd_poly.boundary
@@ -697,12 +711,27 @@ def _solve_boundary_split(contours_gdf, elev_col, bnd_poly, unique_elevs, max_el
         rings = [Polygon(l.coords) for l in raw_lines if l.is_ring and Polygon(l.coords).is_valid and Polygon(l.coords).area > 0]
         open_lines = [l for l in raw_lines if not l.is_ring]
 
+        depression_rings = False
         if len(open_lines) == 0 and len(rings) > 0:
-            stage_p = clean_polygon(unary_union(rings))
+            rings_union = clean_polygon(unary_union(rings))
+            if running_poly is None:
+                stage_p = rings_union
+            else:
+                # Terrain between the next-higher contour and a closed ring at this
+                # elevation lies at/above this elevation, so the stage claims every
+                # connected region of (boundary − higher footprint) that holds a ring.
+                # Descending from the higher contour, the ring is crossed going down,
+                # so its interior lies below this elevation (depression) and is excluded.
+                remainder = clean_polygon(bnd_poly.difference(running_poly))
+                parts = list(remainder.geoms) if remainder.geom_type == "MultiPolygon" else [remainder]
+                enclosing = [p for p in parts if not p.is_empty and p.intersects(rings_union)]
+                stage_p = unary_union(enclosing).difference(rings_union)
+                depression_rings = True
+        elif len(open_lines) == 0:
+            stage_p = bnd_poly
         else:
             ext_lines = [_extend_line(l, ext_dist) for l in open_lines]
-            ring_lines = [Polygon(r.exterior).exterior for r in rings]
-            cut_lines = unary_union(ext_lines + ring_lines)
+            cut_lines = unary_union(ext_lines)
 
             split_res = split(bnd_poly, cut_lines)
             candidates = [p for p in split_res.geoms if p.area > 1e-4]
@@ -714,6 +743,10 @@ def _solve_boundary_split(contours_gdf, elev_col, bnd_poly, unique_elevs, max_el
             else:
                 matching = [p for p in candidates if p.intersection(running_poly).area > 0.4 * running_poly.area]
                 stage_p = unary_union(matching) if matching else max(candidates, key=lambda p: p.intersection(running_poly).area)
+
+        # Include any closed contour rings at this elevation as solid stage terrain
+        if rings and not depression_rings:
+            stage_p = unary_union([stage_p] + rings)
 
         stage_p = clean_polygon(stage_p)
         running_poly = stage_p if running_poly is None else unary_union([running_poly, stage_p])

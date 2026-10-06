@@ -285,8 +285,13 @@
 
   <div class="divider"></div>
 
-  <!-- Contours toggle -->
+  <!-- Contours & Baseline toggles -->
   <div style="margin-bottom:12px">
+    <div class="toggle-row" style="margin-bottom:6px">
+      <button class="toggle-btn active" id="btnBaseline" onclick="toggleBaseline()">
+        Baseline Fill On
+      </button>
+    </div>
     <div class="toggle-row">
       <button class="toggle-btn" id="btnContours" onclick="toggleContours()">
         Contour Lines Off
@@ -393,6 +398,7 @@ const APP = {
   fillEnabled:   false,
   fillFraction:  0.0,    // 0–1 of total depth
   showContours:  false,
+  showBaseline:  true,
   fillEntity:    null,
 };
 
@@ -551,6 +557,22 @@ function addSliceEntity(hierarchy, zLow, zHigh, color, sliceProps) {
   return ent;
 }
 
+function addBaselineEntity(hierarchy, zBase, props) {
+  const ent = viewer.entities.add({
+    polygon: {
+      hierarchy,
+      height:            zBase,
+      material:          Cesium.Color.fromCssColorString('#384252').withAlpha(0.85),
+      outline:           true,
+      outlineColor:      Cesium.Color.fromCssColorString('#687d99').withAlpha(0.90),
+      outlineWidth:      2.0,
+      perPositionHeight: false,
+    },
+  });
+  ent._baselineProps = props;
+  return ent;
+}
+
 function addPolylineEntity(positions, props, clamped) {
   const ent = viewer.entities.add({
     polyline: {
@@ -587,6 +609,17 @@ function rebuildEntities() {
   const scheme     = APP.scheme;
   const groundMode = APP.groundMode;
   const targetType = APP.mode === 'hollow' ? 'slice_hollow' : 'slice_solid';
+
+  // ── Baseline foundation polygon (below all volumetric layers) ───────────
+  if (APP.showBaseline) {
+    const baseFeatures = APP.data.features.filter(f => f.properties.layer_type === 'baseline_polygon');
+    const zBase = calculateElevation(baseElev, baseElev, vExag, groundMode) - 0.05;
+    for (const feat of baseFeatures) {
+      for (const hier of geomToHierarchies(feat.geometry)) {
+        addBaselineEntity(hier, zBase, feat.properties);
+      }
+    }
+  }
 
   // ── Slice polygons ────────────────────────────────────────────────────────
   const slices = APP.data.features.filter(f => f.properties.layer_type === targetType);
@@ -726,6 +759,14 @@ function toggleFill(enabled) {
   }
 }
 
+function toggleBaseline() {
+  APP.showBaseline = !APP.showBaseline;
+  const btn = document.getElementById('btnBaseline');
+  btn.textContent = APP.showBaseline ? 'Baseline Fill On' : 'Baseline Fill Off';
+  btn.classList.toggle('active', APP.showBaseline);
+  scheduleRebuild(true);
+}
+
 function toggleContours() {
   APP.showContours = !APP.showContours;
   const btn = document.getElementById('btnContours');
@@ -788,10 +829,26 @@ function showSliceInfo(p) {
   infoCard.style.display = 'block';
 }
 
+function showBaselineInfo(p) {
+  if (!p) { infoCard.style.display = 'none'; return; }
+  document.getElementById('infoTitle').textContent = p.label || 'Baseline Foundation';
+  document.getElementById('iElev')     .textContent = `${p.elevation.toFixed(1)} m Datum`;
+  document.getElementById('iDepth')    .textContent = '0.00 m (Base)';
+  document.getElementById('iArea')     .textContent = `${fmt(p.area_ha,3)} ha  (${fmt(p.area_m2,0)} m²)`;
+  document.getElementById('iVol')      .textContent = '—';
+  document.getElementById('iSliceCuft').textContent = '—';
+  document.getElementById('iCumVol')   .textContent = '0 m³';
+  document.getElementById('iCumCuft')  .textContent = '0 cu ft';
+  document.getElementById('iAcft')     .textContent = '0.00 ac·ft';
+  infoCard.style.display = 'block';
+}
+
 handler.setInputAction(mv => {
   const hit = viewer.scene.pick(mv.endPosition);
   if (Cesium.defined(hit) && hit.id && hit.id._sliceProps) {
     showSliceInfo(hit.id._sliceProps);
+  } else if (Cesium.defined(hit) && hit.id && hit.id._baselineProps) {
+    showBaselineInfo(hit.id._baselineProps);
   } else {
     infoCard.style.display = 'none';
   }
@@ -801,6 +858,8 @@ handler.setInputAction(clk => {
   const hit = viewer.scene.pick(clk.position);
   if (Cesium.defined(hit) && hit.id && hit.id._sliceProps) {
     showSliceInfo(hit.id._sliceProps);
+  } else if (Cesium.defined(hit) && hit.id && hit.id._baselineProps) {
+    showBaselineInfo(hit.id._baselineProps);
   }
 }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
@@ -875,8 +934,8 @@ function validateGeoJSON(geojson) {
       throw new Error(`Invalid feature at index ${i}: must have type="Feature", geometry, and properties.`);
     }
     const lt = feat.properties.layer_type;
-    if (!['slice_hollow', 'slice_solid', 'contour_line'].includes(lt)) {
-      throw new Error(`Feature at index ${i} has invalid layer_type: '${lt}'. Must be 'slice_hollow', 'slice_solid', or 'contour_line'.`);
+    if (!['slice_hollow', 'slice_solid', 'contour_line', 'baseline_polygon'].includes(lt)) {
+      throw new Error(`Feature at index ${i} has invalid layer_type: '${lt}'. Must be 'slice_hollow', 'slice_solid', 'contour_line', or 'baseline_polygon'.`);
     }
 
     if (lt === 'slice_hollow' || lt === 'slice_solid') {
@@ -888,6 +947,10 @@ function validateGeoJSON(geojson) {
     } else if (lt === 'contour_line') {
       if (typeof feat.properties.elevation !== 'number' || isNaN(feat.properties.elevation)) {
         throw new Error(`Contour feature at index ${i} has invalid/missing numeric 'elevation'.`);
+      }
+    } else if (lt === 'baseline_polygon') {
+      if (typeof feat.properties.elevation !== 'number' || isNaN(feat.properties.elevation)) {
+        throw new Error(`Baseline feature at index ${i} has invalid/missing numeric 'elevation'.`);
       }
     }
   }

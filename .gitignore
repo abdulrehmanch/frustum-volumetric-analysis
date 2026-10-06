@@ -69,6 +69,8 @@ htmlcov/
 *.log
 *.tmp
 *.bak
+*.db
+auth.db
 
 # ----------------------------------------------------------------------------
 # Cloudflare / Wrangler deployment

@@ -185,10 +185,14 @@ def build_hollow_features(gdf_slices: gpd.GeoDataFrame, gdf_cumul: gpd.GeoDataFr
             match = gdf_cumul[gdf_cumul["STAGE_ID"] == int(row["STAGE_ID"])]
             if len(match) > 0:
                 cg = match.iloc[0].geometry
-                if cg.geom_type == "Polygon":
-                    geom = Polygon(cg.exterior)
-                elif cg.geom_type == "MultiPolygon":
-                    geom = MultiPolygon([Polygon(p.exterior) for p in cg.geoms])
+                if cg and not cg.is_empty:
+                    if cg.geom_type == "Polygon":
+                        geom = Polygon(cg.exterior)
+                    elif cg.geom_type == "MultiPolygon":
+                        geom = MultiPolygon([Polygon(p.exterior) for p in cg.geoms])
+
+        if geom is None or geom.is_empty:
+            continue
 
         features.append({
             "type":       "Feature",
@@ -257,6 +261,35 @@ def build_contour_features(gdf_cumul: gpd.GeoDataFrame) -> list[dict]:
     return features
 
 
+def build_baseline_features(gdf_cumul: gpd.GeoDataFrame, base_elev: float) -> list[dict]:
+    """
+    Build baseline foundation polygon feature directly from the base stage footprint (Stage 1).
+    Renders as a distinguished grounding polygon underneath all volumetric layers.
+    """
+    base_rows = gdf_cumul[gdf_cumul["STAGE_ID"] == 1]
+    if base_rows.empty:
+        base_rows = gdf_cumul[gdf_cumul["ELEVATION"] == gdf_cumul["ELEVATION"].min()]
+    if base_rows.empty:
+        return []
+
+    row = base_rows.iloc[0]
+    geom = row.geometry
+    if geom is None or geom.is_empty:
+        return []
+
+    return [{
+        "type": "Feature",
+        "properties": {
+            "layer_type": "baseline_polygon",
+            "elevation":  round(float(row["ELEVATION"]), 3),
+            "area_m2":    round(float(row["AREA_M2"]), 2),
+            "area_ha":    round(float(row["AREA_HA"]), 4),
+            "label":      f"Baseline Foundation ({float(row['ELEVATION']):.1f} m Datum)",
+        },
+        "geometry": mapping(geom),
+    }]
+
+
 # --------------------------------------------------------------------------- #
 # Main Execution
 # --------------------------------------------------------------------------- #
@@ -323,6 +356,7 @@ def main():
     # ── Build GeoJSON Feature Collections ────────────────────────────────────
     print("  Compiling 3D GeoJSON features…")
     features = []
+    features.extend(build_baseline_features(gdf_cumul, base_elev))
     features.extend(build_hollow_features(gdf_slices, gdf_cumul, crest_elev))
     features.extend(build_solid_features(gdf_slices, gdf_cumul, crest_elev))
     features.extend(build_contour_features(gdf_cumul))
@@ -381,9 +415,6 @@ def main():
             generate_site_dashboard(parent_dir)
         else:
             generate_site_dashboard(out_dir)
-
-        from build_portal import scan_and_build_all
-        scan_and_build_all()
     except Exception as e:
         pass
 

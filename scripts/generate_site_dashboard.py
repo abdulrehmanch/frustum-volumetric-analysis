@@ -9,9 +9,9 @@ multi-pit/multi-block sites.
 """
 
 import os
+import csv
 import glob
 import json
-import pandas as pd
 
 M3_TO_CUFT = 35.31466672148859
 M3_TO_ACRE_FEET = 0.000810713194
@@ -19,7 +19,7 @@ M3_TO_ACRE_FEET = 0.000810713194
 
 def fmt(n, d=0):
     """Format number with thousands separators."""
-    if n is None or pd.isna(n):
+    if n is None or n == "" or n == "—":
         return "—"
     try:
         val = float(n)
@@ -90,26 +90,34 @@ def _parse_unit_dir(unit_dir, rel_prefix=""):
     maps = glob.glob(os.path.join(unit_dir, "*contour_slices_map.png"))
     maps_file = os.path.basename(maps[0]) if maps else None
 
-    # Load schedule table from CSV if available
+    # Load schedule table from CSV if available using built-in csv reader
     schedule_rows = []
     endarea_vol_m3 = None
     if report_file and os.path.exists(os.path.join(unit_dir, report_file)):
         try:
-            df = pd.read_csv(os.path.join(unit_dir, report_file))
-            if "Cumul_EndArea_Vol_m3" in df.columns:
-                endarea_vol_m3 = float(df["Cumul_EndArea_Vol_m3"].max())
-            for _, r in df.iterrows():
-                schedule_rows.append({
-                    "stage_id": int(r.get("Stage_ID", 0)),
-                    "elevation": float(r.get("Elevation_m", 0.0)),
-                    "depth": float(r.get("Stage_Depth_m", 0.0)),
-                    "area_m2": float(r.get("Contour_Area_m2", 0.0)),
-                    "vol_m3": float(r.get("Slice_Frustum_Vol_m3", 0.0)),
-                    "vol_cuft": float(r.get("Slice_Frustum_Vol_CuFt", 0.0)),
-                    "cum_m3": float(r.get("Cumul_Frustum_Vol_m3", 0.0)),
-                    "cum_cuft": float(r.get("Cumul_Frustum_Vol_CuFt", 0.0)),
-                    "diff_pct": float(r.get("Delta_Percent", 0.0)),
-                })
+            with open(os.path.join(unit_dir, report_file), "r", encoding="utf-8") as rf:
+                reader = csv.DictReader(rf)
+                for r in reader:
+                    ea_val = r.get("Cumul_EndArea_Vol_m3")
+                    if ea_val:
+                        try:
+                            f_val = float(ea_val)
+                            if endarea_vol_m3 is None or f_val > endarea_vol_m3:
+                                endarea_vol_m3 = f_val
+                        except ValueError:
+                            pass
+
+                    schedule_rows.append({
+                        "stage_id": int(float(r.get("Stage_ID", 0))),
+                        "elevation": float(r.get("Elevation_m", 0.0)),
+                        "depth": float(r.get("Stage_Depth_m", 0.0)),
+                        "area_m2": float(r.get("Contour_Area_m2", 0.0)),
+                        "vol_m3": float(r.get("Slice_Frustum_Vol_m3", 0.0)),
+                        "vol_cuft": float(r.get("Slice_Frustum_Vol_CuFt", 0.0)),
+                        "cum_m3": float(r.get("Cumul_Frustum_Vol_m3", 0.0)),
+                        "cum_cuft": float(r.get("Cumul_Frustum_Vol_CuFt", 0.0)),
+                        "diff_pct": float(r.get("Delta_Percent", 0.0)),
+                    })
         except Exception:
             pass
 
