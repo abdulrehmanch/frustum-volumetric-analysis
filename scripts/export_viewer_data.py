@@ -371,13 +371,30 @@ def main():
     else:
         print(f"  WARNING: Viewer template not found at {VIEWER_SRC}", file=sys.stderr)
 
+    # ── Auto-Generate Site Dashboard & Update Master Portal ──────────────────
+    try:
+        sys.path.insert(0, SCRIPT_DIR)
+        from generate_site_dashboard import generate_site_dashboard
+        parent_dir = os.path.dirname(out_dir)
+        grandparent_name = os.path.basename(os.path.dirname(parent_dir)).lower()
+        if grandparent_name in ("outputs", "output"):
+            generate_site_dashboard(parent_dir)
+        else:
+            generate_site_dashboard(out_dir)
+
+        from build_portal import scan_and_build_all
+        scan_and_build_all()
+    except Exception as e:
+        pass
+
     rel_dir = os.path.relpath(out_dir)
     print(f"\n{sep}")
     print("STATUS: SUCCESS — 3D Viewer data exported and HTML deployed.")
     print(sep)
     print("To view locally:")
-    print(f"  python3 -m http.server 8080 --directory {rel_dir}")
-    print(f"  → http://localhost:8080/{prefix}_3d_viewer.html")
+    print("  python3 scripts/serve_portal.py --port 8080")
+    print("  → Master Portal : http://localhost:8080/")
+    print(f"  → 3D Viewer     : http://localhost:8080/{os.path.relpath(viewer_dst, os.path.join(REPO_ROOT if 'REPO_ROOT' in locals() else SCRIPT_DIR, '..', 'outputs'))}")
     print(sep)
 
 
